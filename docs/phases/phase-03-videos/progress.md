@@ -1,7 +1,7 @@
 # phase-03-videos — Progress
 
 **Status:** in_progress
-**SIs:** 3/11 completed
+**SIs:** 4/11 completed
 
 ### SI-03.1 — Dependências, namespaces de configuração e serviços de infraestrutura
 - **Status:** completed
@@ -28,9 +28,10 @@
   - `presignUploadPart` deliberately omits `ContentType` — S3 signs it into the URL and the client would have to reproduce the header byte-for-byte; the content type belongs on `CreateMultipartUpload`.
 
 ### SI-03.4 — Slug único de vídeo e resolução do canal do usuário
-- **Status:** pending
-- **Tests:** —
-- **Observations:** none
+- **Status:** completed
+- **Tests:** 8/8 passing (video-slug.util.spec.ts: 3, channels.service.integration-spec.ts: 5 including the two new findByUserId cases)
+- **Observations:**
+  - `findByUserId` went into `ChannelsService` rather than the videos module, which is the resolution recorded for `DG-1` in validation.md — channel ownership stays behind the channels boundary.
 
 ### SI-03.5 — Início do upload: rascunho automático e URLs de parte
 - **Status:** pending
