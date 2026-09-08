@@ -13,6 +13,10 @@ docker compose ps   # all services must show status "running"
 Then verify each infrastructure service is actually ready to accept connections — not just running:
 
 - **PostgreSQL:** `docker compose exec db pg_isready -U streamtube` — expect `accepting connections`
+- **MinIO:** `docker compose exec minio mc ready local` — expect the endpoint reported as online
+- **Redis:** `docker compose exec redis redis-cli ping` — expect `PONG`
+
+The `video-worker` service is **not** infrastructure: it is application code. Like `nestjs-api`, start it only when the user explicitly asks to run the worker.
 
 Only start the NestJS dev server (`npm run start:dev`) when the user **explicitly** asks to run the application — never as part of "start the environment".
 
@@ -33,7 +37,11 @@ docker compose exec nestjs-api npm run start:dev
 
 Services:
 - `nestjs-api` — NestJS API, port `3000`
+- `video-worker` — NestJS standalone context consuming the `video-processing` queue; carries FFmpeg (`Dockerfile.worker`)
 - `db` — PostgreSQL 17, port `5432`, database `streamtube`, user/password `streamtube`
+- `mailpit` — SMTP on `1025`, web UI on `8025`
+- `minio` — S3-compatible object storage, API on `9000`, console on `9001`, bucket `streamtube`
+- `redis` — queue broker for BullMQ, port `6379`, AOF persistence enabled
 
 All verification and teardown commands run on the **host machine**:
 
@@ -46,6 +54,7 @@ docker compose exec db pg_isready -U streamtube
 
 # Check container logs
 docker compose logs nestjs-api
+docker compose logs video-worker
 docker compose logs db
 
 # Tear down the entire environment
@@ -60,6 +69,7 @@ docker compose down
 
 ```bash
 npm run start:dev                        # Dev server with hot-reload
+npm run start:worker                     # Video worker (standalone context, no HTTP server)
 npm run build                            # Compile to dist/
 npm run start:prod                       # Run compiled build
 
@@ -78,13 +88,15 @@ npm run format                           # Prettier formatting
 ```bash
 docker compose ps
 docker compose logs nestjs-api
+docker compose logs video-worker
 docker compose exec db pg_isready -U streamtube
+docker compose exec redis redis-cli ping
 curl http://localhost:3000
 ```
 
 ### Test execution
 
-Integration and e2e suites share a single test database. They **must** be run with `--runInBand`:
+Integration and e2e suites share a single test database, plus the real MinIO, Redis and FFmpeg from Compose. They **must** run serially — the unit/integration run needs `--runInBand`, and `test/jest-e2e.json` pins `maxWorkers: 1`:
 
 ```bash
 docker compose exec nestjs-api npm test -- --runInBand
@@ -148,6 +160,26 @@ NestJS with standard module structure. Source lives in `src/`, compiled output i
 
 - Each domain feature gets its own module (e.g., `UsersModule`, `VideosModule`) registered in `AppModule`
 - Controllers handle HTTP routing; Services hold business logic; both are scoped to their module
+
+### Videos module
+
+`src/videos/` owns the video lifecycle. The endpoints, the upload handshake and the status cycle are documented in the root `CLAUDE.md` → "Videos".
+
+| Path | Responsibility |
+|------|----------------|
+| `videos/videos.controller.ts` | The eight HTTP routes: create, presign parts, complete, abort, metadata, thumbnail, stream, download |
+| `videos/videos.service.ts` | Draft creation, presigning, completion, ownership checks and the delivery reads |
+| `videos/entities/video.entity.ts` | The `videos` table, linked to `channels` |
+| `videos/range.util.ts` | `Range` header parsing for `206 Partial Content` |
+| `videos/processing/` | FFmpeg wrapper, processing service and the BullMQ processor — consumed by the worker, not by the API |
+| `src/worker/` | The worker composition root (`worker.module.ts`, `main.worker.ts`) |
+| `src/storage/` | The S3/MinIO adapter; nothing outside it talks to the AWS SDK |
+
+`WorkerModule` imports `UsersModule` even though the worker never queries users: `autoLoadEntities` only registers entities declared by imported modules, and TypeORM resolves `Video → Channel → User` as one metadata graph.
+
+### FFmpeg
+
+`ffmpeg` and `ffprobe` are installed in both `Dockerfile.worker` (the worker needs them at runtime) and `Dockerfile.dev` (the test suite runs inside `nestjs-api` and exercises the real toolchain). Sources are read through short-lived presigned URLs, so FFmpeg fetches only the bytes it needs over HTTP range requests and a 10GB file never lands on disk.
 
 ## Code Conventions
 

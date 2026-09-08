@@ -24,10 +24,12 @@ function makeChannel(nickname: string): Channel {
 }
 
 function makeUniqueError(): QueryFailedError {
-  const err = new QueryFailedError('INSERT', [], new Error()) as any;
-  err.code = '23505';
-  err.detail = 'Key (nickname)=(abc) already exists.';
-  return err;
+  // Mirrors the shape node-postgres produces: the driver error carries `code`
+  // and `detail`, and TypeORM wraps it in QueryFailedError.driverError.
+  const driverError = new Error('duplicate key value') as any;
+  driverError.code = '23505';
+  driverError.detail = 'Key (nickname)=(abc) already exists.';
+  return new QueryFailedError('INSERT', [], driverError);
 }
 
 function makeDataSource(manager: any): any {
