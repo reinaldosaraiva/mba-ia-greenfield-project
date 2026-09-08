@@ -5,6 +5,7 @@ import { QueryFailedError } from 'typeorm';
 import { ChannelsService } from '../channels/channels.service';
 import {
   ChannelNotFoundException,
+  ThumbnailNotAvailableException,
   UnsupportedVideoTypeException,
   VideoNotFoundException,
   VideoTooLargeException,
@@ -309,6 +310,44 @@ describe('VideosService', () => {
       ).rejects.toBeInstanceOf(VideoUploadNotPendingException);
 
       expect(processingQueue.add).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('findBySlugForOwner', () => {
+    it('raises VideoNotFoundException for an unknown slug', async () => {
+      repository.findOne.mockResolvedValue(null);
+
+      await expect(
+        service.findBySlugForOwner(USER_ID, 'unknownslug'),
+      ).rejects.toBeInstanceOf(VideoNotFoundException);
+    });
+
+    it('raises VideoNotFoundException for a slug owned by another channel', async () => {
+      repository.findOne.mockResolvedValue({
+        id: VIDEO_ID,
+        slug: 'otherslug1',
+        channel_id: OTHER_CHANNEL_ID,
+      });
+
+      await expect(
+        service.findBySlugForOwner(USER_ID, 'otherslug1'),
+      ).rejects.toBeInstanceOf(VideoNotFoundException);
+    });
+  });
+
+  describe('readThumbnail', () => {
+    it('raises ThumbnailNotAvailableException before processing completes', async () => {
+      repository.findOne.mockResolvedValue({
+        id: VIDEO_ID,
+        slug: 'pendingslu',
+        channel_id: CHANNEL_ID,
+        status: VideoStatus.PROCESSING,
+        thumbnail_key: null,
+      });
+
+      await expect(
+        service.readThumbnail(USER_ID, 'pendingslu'),
+      ).rejects.toBeInstanceOf(ThumbnailNotAvailableException);
     });
   });
 

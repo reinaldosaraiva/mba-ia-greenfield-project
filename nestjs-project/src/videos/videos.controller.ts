@@ -2,12 +2,16 @@ import {
   Body,
   Controller,
   Delete,
+  Get,
+  Header,
   HttpCode,
   HttpStatus,
   Param,
   ParseUUIDPipe,
   Post,
+  Res,
 } from '@nestjs/common';
+import type { Response } from 'express';
 import { Throttle } from '@nestjs/throttler';
 import {
   ApiBearerAuth,
@@ -22,6 +26,7 @@ import { ApiErrorEnvelope } from '../common/openapi/api-error-envelope.dto';
 import { CompleteUploadDto } from './dto/complete-upload.dto';
 import { CreateVideoDto } from './dto/create-video.dto';
 import { PresignPartsDto } from './dto/presign-parts.dto';
+import { toVideoResponse, VideoResponseDto } from './dto/video-response.dto';
 import { VideosService } from './videos.service';
 import type {
   CreatedVideo,
@@ -193,6 +198,67 @@ export class VideosController {
     @Body() dto: CompleteUploadDto,
   ): Promise<VideoUploadStatus> {
     return this.videosService.completeUpload(user.sub, id, dto);
+  }
+
+  @Get(':slug')
+  @ApiOperation({
+    summary: 'Read video metadata',
+    description:
+      'Resolves the unique public identifier to the video, including the current processing status.',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Video metadata',
+    type: VideoResponseDto,
+  })
+  @ApiResponse({
+    status: 401,
+    description: 'Missing or invalid access token',
+    schema: { $ref: getSchemaPath(ApiErrorEnvelope) },
+  })
+  @ApiResponse({
+    status: 404,
+    description: 'Video not found for the caller',
+    schema: { $ref: getSchemaPath(ApiErrorEnvelope) },
+  })
+  async findOne(
+    @CurrentUser() user: JwtPayload,
+    @Param('slug') slug: string,
+  ): Promise<VideoResponseDto> {
+    return toVideoResponse(
+      await this.videosService.findBySlugForOwner(user.sub, slug),
+    );
+  }
+
+  @Get(':slug/thumbnail')
+  @Header('Cache-Control', 'private, max-age=300')
+  @ApiOperation({
+    summary: 'Read the generated thumbnail',
+    description:
+      'Streams the JPEG frame the worker extracted from the video. Available once processing completes.',
+  })
+  @ApiResponse({ status: 200, description: 'Thumbnail image (JPEG)' })
+  @ApiResponse({
+    status: 401,
+    description: 'Missing or invalid access token',
+    schema: { $ref: getSchemaPath(ApiErrorEnvelope) },
+  })
+  @ApiResponse({
+    status: 404,
+    description: 'Video not found, or the thumbnail is not available yet',
+    schema: { $ref: getSchemaPath(ApiErrorEnvelope) },
+  })
+  async readThumbnail(
+    @CurrentUser() user: JwtPayload,
+    @Param('slug') slug: string,
+    @Res() response: Response,
+  ): Promise<void> {
+    const thumbnail = await this.videosService.readThumbnail(user.sub, slug);
+
+    response.status(HttpStatus.OK);
+    response.setHeader('Content-Type', thumbnail.contentType ?? 'image/jpeg');
+    response.setHeader('Content-Length', thumbnail.contentLength);
+    thumbnail.body.pipe(response);
   }
 
   @Delete(':id/uploads')

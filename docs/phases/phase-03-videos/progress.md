@@ -1,7 +1,7 @@
 # phase-03-videos — Progress
 
 **Status:** in_progress
-**SIs:** 8/11 completed
+**SIs:** 9/11 completed
 
 ### SI-03.1 — Dependências, namespaces de configuração e serviços de infraestrutura
 - **Status:** completed
@@ -68,9 +68,12 @@
   - With the worker running, the "exactly one waiting job" integration assertion only holds because that test pauses the queue around the completion.
 
 ### SI-03.9 — Endpoints de leitura: metadados e thumbnail
-- **Status:** pending
-- **Tests:** —
-- **Observations:** none
+- **Status:** completed
+- **Tests:** 225 unit/integration + 70 e2e passing (videos.service.spec.ts: 17, videos.e2e-spec.ts: 18 including the full create -> upload -> complete -> ready -> thumbnail path)
+- **Observations:**
+  - Pulled the plan's SI-03.10 action that imports `VideoProcessingModule` into the e2e testing module forward to this SI: the thumbnail assertion needs a genuinely processed video, and running the real BullMQ worker in-process makes the automatic pipeline observable without depending on the worker container being up.
+  - The e2e uploads the generated clip as a single part — S3 enforces the 5MiB floor only on parts that are not the last one, so a real 42KB clip is a valid one-part upload.
+  - `fetch` rejects `Buffer<ArrayBufferLike>` in its BodyInit union; the clip is passed as a `Uint8Array` view.
 
 ### SI-03.10 — Streaming com Range e download
 - **Status:** pending

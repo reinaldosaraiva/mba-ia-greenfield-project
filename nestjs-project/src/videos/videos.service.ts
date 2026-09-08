@@ -9,6 +9,7 @@ import { ChannelsService } from '../channels/channels.service';
 import { isUniqueViolationOnColumn } from '../common/database/pg-error.util';
 import {
   ChannelNotFoundException,
+  ThumbnailNotAvailableException,
   UnsupportedVideoTypeException,
   VideoNotFoundException,
   VideoTooLargeException,
@@ -16,6 +17,7 @@ import {
 } from '../common/exceptions/domain.exception';
 import videoConfig from '../config/video.config';
 import { buildSourceKey } from '../storage/object-key.util';
+import type { ObjectStream } from '../storage/storage.service';
 import { StorageService } from '../storage/storage.service';
 import { CompleteUploadDto } from './dto/complete-upload.dto';
 import { CreateVideoDto } from './dto/create-video.dto';
@@ -181,6 +183,20 @@ export class VideosService {
       video.upload_id as string,
     );
     await this.videoRepository.delete({ id: video.id });
+  }
+
+  async findBySlugForOwner(userId: string, slug: string): Promise<Video> {
+    return this.findOwnedVideo(userId, { slug });
+  }
+
+  async readThumbnail(userId: string, slug: string): Promise<ObjectStream> {
+    const video = await this.findOwnedVideo(userId, { slug });
+
+    if (!video.thumbnail_key) {
+      throw new ThumbnailNotAvailableException();
+    }
+
+    return this.storageService.getObjectRange(video.thumbnail_key);
   }
 
   private async persistDraft(draft: Partial<Video>): Promise<Video> {

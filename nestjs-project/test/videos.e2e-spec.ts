@@ -11,7 +11,9 @@ import { AuthService } from '../src/auth/auth.service';
 import { DomainExceptionFilter } from '../src/common/filters/domain-exception.filter';
 import { ValidationExceptionFilter } from '../src/common/filters/validation-exception.filter';
 import { StorageService } from '../src/storage/storage.service';
+import { VideoProcessingModule } from '../src/videos/processing/video-processing.module';
 import { cleanAllTables } from '../src/test/create-test-data-source';
+import { generateVideoClip, GeneratedClip } from '../src/test/video-fixture';
 import { VIDEO_PROCESSING_QUEUE } from '../src/videos/videos.constants';
 
 const MIN_PART_SIZE = 5 * 1024 * 1024;
@@ -30,11 +32,15 @@ describe('Videos (e2e)', () => {
   let storage: StorageService;
   let throttlerStorage: ThrottlerStorageService;
   let processingQueue: Queue;
+  let clip: GeneratedClip;
   const touchedPrefixes: string[] = [];
 
   beforeAll(async () => {
+    // VideoProcessingModule runs the real BullMQ worker in-process, so the
+    // create -> upload -> complete -> ready path is exercised end to end against
+    // the same Redis, MinIO and FFmpeg the worker container uses.
     moduleFixture = await Test.createTestingModule({
-      imports: [AppModule],
+      imports: [AppModule, VideoProcessingModule],
     }).compile();
 
     app = moduleFixture.createNestApplication();
@@ -58,12 +64,14 @@ describe('Videos (e2e)', () => {
     processingQueue = moduleFixture.get<Queue>(
       getQueueToken(VIDEO_PROCESSING_QUEUE),
     );
-  }, 60000);
+    clip = await generateVideoClip(3, 320, 240);
+  }, 120000);
 
   afterAll(async () => {
     for (const prefix of touchedPrefixes) {
       await storage.deletePrefix(prefix);
     }
+    await clip.cleanup();
     await app.close();
   }, 60000);
 
@@ -112,6 +120,35 @@ describe('Videos (e2e)', () => {
       .expect(201);
     touchedPrefixes.push(`videos/${response.body.id}/`);
     return response.body;
+  }
+
+  function readVideo(token: string, slug: string) {
+    return request(app.getHttpServer())
+      .get(`/videos/${slug}`)
+      .set('Authorization', `Bearer ${token}`);
+  }
+
+  async function waitForStatus(
+    token: string,
+    slug: string,
+    expected: string,
+    timeoutMs = 60000,
+  ): Promise<Record<string, unknown>> {
+    const deadline = Date.now() + timeoutMs;
+    let last: Record<string, unknown> = {};
+
+    while (Date.now() < deadline) {
+      const response = await readVideo(token, slug);
+      last = response.body as Record<string, unknown>;
+      if (last.status === expected) {
+        return last;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+
+    throw new Error(
+      `Video ${slug} never reached "${expected}" (last status: ${String(last.status)})`,
+    );
   }
 
   describe('POST /videos', () => {
@@ -250,6 +287,35 @@ describe('Videos (e2e)', () => {
     );
   }
 
+  // A single-part upload: the real clip is far below the 5MiB multipart floor,
+  // which S3 only enforces on parts that are not the last one.
+  async function uploadWholeClip(
+    token: string,
+    videoId: string,
+  ): Promise<void> {
+    const presigned = await request(app.getHttpServer())
+      .post(`/videos/${videoId}/uploads/parts`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ part_numbers: [1] })
+      .expect(200);
+
+    const upload = await fetch(presigned.body.parts[0].url as string, {
+      method: 'PUT',
+      // `Buffer<ArrayBufferLike>` is not assignable to fetch's BodyInit union;
+      // a plain Uint8Array view is.
+      body: new Uint8Array(clip.buffer),
+    });
+    expect(upload.status).toBe(200);
+
+    await request(app.getHttpServer())
+      .post(`/videos/${videoId}/uploads/complete`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        parts: [{ part_number: 1, etag: upload.headers.get('etag') as string }],
+      })
+      .expect(202);
+  }
+
   describe('POST /videos/:id/uploads/complete', () => {
     it('closes the handshake and moves the video to processing', async () => {
       const token = await signIn();
@@ -302,6 +368,89 @@ describe('Videos (e2e)', () => {
         .expect(404);
 
       expect(response.body.error).toBe('VIDEO_NOT_FOUND');
+    }, 120000);
+  });
+
+  describe('GET /videos/:slug', () => {
+    it('resolves the unique identifier to the video metadata', async () => {
+      const token = await signIn();
+      const draft = await createDraft(token);
+
+      const response = await readVideo(token, draft.slug).expect(200);
+
+      expect(response.body).toMatchObject({
+        id: draft.id,
+        slug: draft.slug,
+        title: VALID_BODY.title,
+        status: 'draft',
+        mime_type: VALID_BODY.mime_type,
+        original_filename: VALID_BODY.filename,
+        duration_seconds: null,
+        metadata: null,
+        processing_error: null,
+      });
+    }, 120000);
+
+    it('answers an unknown slug as not found', async () => {
+      const token = await signIn();
+
+      const response = await readVideo(token, 'doesnotexis').expect(404);
+
+      expect(response.body.error).toBe('VIDEO_NOT_FOUND');
+    }, 120000);
+
+    it('answers a video owned by another user exactly like an unknown one', async () => {
+      const owner = await signIn();
+      const draft = await createDraft(owner);
+      const stranger = await signIn();
+
+      const response = await readVideo(stranger, draft.slug).expect(404);
+
+      expect(response.body.error).toBe('VIDEO_NOT_FOUND');
+    }, 120000);
+
+    it('rejects an unauthenticated request', async () => {
+      const token = await signIn();
+      const draft = await createDraft(token);
+
+      await request(app.getHttpServer())
+        .get(`/videos/${draft.slug}`)
+        .expect(401);
+    }, 120000);
+  });
+
+  describe('GET /videos/:slug/thumbnail', () => {
+    it('returns the generated JPEG once processing completes', async () => {
+      const token = await signIn();
+      const draft = await createDraft(token, {
+        size_bytes: clip.buffer.length,
+      });
+      await uploadWholeClip(token, draft.id);
+
+      const ready = await waitForStatus(token, draft.slug, 'ready');
+      expect(ready.duration_seconds).toBe(clip.durationSeconds);
+
+      const response = await request(app.getHttpServer())
+        .get(`/videos/${draft.slug}/thumbnail`)
+        .set('Authorization', `Bearer ${token}`)
+        .expect(200);
+
+      expect(response.headers['content-type']).toContain('image/jpeg');
+      expect(response.body.subarray(0, 3)).toEqual(
+        Buffer.from([0xff, 0xd8, 0xff]),
+      );
+    }, 180000);
+
+    it('answers 404 while the video is still processing', async () => {
+      const token = await signIn();
+      const draft = await createDraft(token);
+
+      const response = await request(app.getHttpServer())
+        .get(`/videos/${draft.slug}/thumbnail`)
+        .set('Authorization', `Bearer ${token}`)
+        .expect(404);
+
+      expect(response.body.error).toBe('THUMBNAIL_NOT_AVAILABLE');
     }, 120000);
   });
 
