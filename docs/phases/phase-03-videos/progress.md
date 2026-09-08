@@ -1,12 +1,15 @@
 # phase-03-videos — Progress
 
 **Status:** in_progress
-**SIs:** 0/11 completed
+**SIs:** 1/11 completed
 
 ### SI-03.1 — Dependências, namespaces de configuração e serviços de infraestrutura
-- **Status:** pending
-- **Tests:** —
-- **Observations:** none
+- **Status:** completed
+- **Tests:** 10/10 passing (env.validation.integration-spec.ts)
+- **Observations:**
+  - `STORAGE_ACCESS_KEY_ID` / `STORAGE_SECRET_ACCESS_KEY` are Joi-required, so the pre-existing `requiredEnv` fixture in the env spec had to be extended or every prior case would fail.
+  - `ffmpeg` was added to `Dockerfile.dev` as well as the future worker image: the suite runs inside `nestjs-api`, and `phase-03-videos/TD-10` requires the real toolchain in integration tests.
+  - MinIO healthcheck uses `mc ready local`, which ships in the current `minio/minio` image.
 
 ### SI-03.2 — Entidade Video, migration e módulo
 - **Status:** pending
