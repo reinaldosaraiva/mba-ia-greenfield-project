@@ -1,7 +1,7 @@
 # phase-03-videos — Progress
 
 **Status:** in_progress
-**SIs:** 7/11 completed
+**SIs:** 8/11 completed
 
 ### SI-03.1 — Dependências, namespaces de configuração e serviços de infraestrutura
 - **Status:** completed
@@ -61,9 +61,11 @@
   - `ffprobe` and `ffmpeg` read the source through a presigned URL over HTTP range requests — the integration test confirms processing completes with nothing written to the worker's disk.
 
 ### SI-03.8 — Serviço video-worker no Docker Compose
-- **Status:** pending
-- **Tests:** —
-- **Observations:** none
+- **Status:** completed
+- **Tests:** no tests (Infra) — suite stayed green with the worker container competing for the same queue: 222 unit/integration + 64 e2e
+- **Observations:**
+  - The worker image is separate from the API image: only the worker needs FFmpeg in production, and the API should not carry the transcoding toolchain.
+  - With the worker running, the "exactly one waiting job" integration assertion only holds because that test pauses the queue around the completion.
 
 ### SI-03.9 — Endpoints de leitura: metadados e thumbnail
 - **Status:** pending
