@@ -1,7 +1,7 @@
 # phase-03-videos — Progress
 
 **Status:** in_progress
-**SIs:** 2/11 completed
+**SIs:** 3/11 completed
 
 ### SI-03.1 — Dependências, namespaces de configuração e serviços de infraestrutura
 - **Status:** completed
@@ -20,9 +20,12 @@
   - `cleanAllTables` deletes `videos` before `channels` to respect the new foreign key.
 
 ### SI-03.3 — Adaptador de object storage (S3/MinIO)
-- **Status:** pending
-- **Tests:** —
-- **Observations:** none
+- **Status:** completed
+- **Tests:** 16/16 passing (object-key.util.spec.ts: 8, storage.module.spec.ts: 1, storage.service.integration-spec.ts: 7 against real MinIO)
+- **Observations:**
+  - The integration spec uploads a real 5MiB first part: S3 and MinIO both reject `CompleteMultipartUpload` with `EntityTooSmall` when a non-final part is under 5MiB, so a token-sized fixture would not exercise the real path.
+  - `GetObjectCommand` types `Body` as a runtime union; on Node it is always a `Readable`, so the cast is confined to `StorageService.getObjectRange` and never leaks to callers.
+  - `presignUploadPart` deliberately omits `ContentType` — S3 signs it into the URL and the client would have to reproduce the header byte-for-byte; the content type belongs on `CreateMultipartUpload`.
 
 ### SI-03.4 — Slug único de vídeo e resolução do canal do usuário
 - **Status:** pending
