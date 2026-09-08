@@ -248,6 +248,33 @@ describe('Videos (e2e)', () => {
       expect(response.body.error).toBe('VIDEO_NOT_FOUND');
     }, 60000);
 
+    it('keys the throttle by user so one uploader cannot exhaust another', async () => {
+      const first = await signIn();
+      const firstDraft = await createDraft(first);
+      const second = await signIn();
+      const secondDraft = await createDraft(second);
+
+      for (let i = 0; i < 60; i++) {
+        await request(app.getHttpServer())
+          .post(`/videos/${firstDraft.id}/uploads/parts`)
+          .set('Authorization', `Bearer ${first}`)
+          .send({ part_numbers: [1] })
+          .expect(200);
+      }
+
+      await request(app.getHttpServer())
+        .post(`/videos/${firstDraft.id}/uploads/parts`)
+        .set('Authorization', `Bearer ${first}`)
+        .send({ part_numbers: [1] })
+        .expect(429);
+
+      await request(app.getHttpServer())
+        .post(`/videos/${secondDraft.id}/uploads/parts`)
+        .set('Authorization', `Bearer ${second}`)
+        .send({ part_numbers: [1] })
+        .expect(200);
+    }, 120000);
+
     it('refuses part numbers beyond what the declared size allows', async () => {
       const token = await signIn();
       // 20MiB with the default 10MiB part size is exactly two parts.

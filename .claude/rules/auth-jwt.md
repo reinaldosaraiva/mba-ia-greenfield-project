@@ -66,4 +66,5 @@ This module is responsible for registering `JwtAuthGuard` as `APP_GUARD`. The de
 ## Rate Limiting
 
 - Rate limits on auth endpoints are enforced by the global `ThrottlerGuard`.
+- The tracker is `throttlerTracker` (`src/auth/throttler-tracker.ts`): an authenticated request is keyed by the JWT `sub`, an anonymous one by the client IP. `JwtAuthGuard` is registered before `ThrottlerGuard`, so `req.user` is already attached when the tracker runs. Keep that order.
 - E2E tests for non-throttled endpoints must clear the throttler storage in `beforeEach` to avoid leaking 429s across describe blocks. See `.claude/rules/nestjs-testing.md` for the override pattern.

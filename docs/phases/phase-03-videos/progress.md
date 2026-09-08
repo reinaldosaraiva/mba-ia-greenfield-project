@@ -120,5 +120,19 @@ Independent pass over every acceptance criterion in `phase-03-videos.md` and the
 - Every criterion maps to at least one automated test or a verified runtime check (Compose health, `ffmpeg`/`ffprobe` in both containers, worker boot log, all eight paths in `openapi.json`, queue named in `CLAUDE.md` and the architecture diagram). All five DoD gates were re-executed and reproduced.
 - Gap closed: `stream-response.util.ts` (SI-03.12) had no spec, so the criterion "a storage failure mid-stream does not terminate the API process, and a client disconnect destroys the upstream storage stream" was only verified by inspection. Added `stream-response.util.spec.ts` with five cases: byte-exact copy, rethrow before headers, truncate-and-log after headers, source destroyed on client disconnect, and `ECONNRESET` treated as a disconnect.
 - Observed, not changed: the migrations spec asserts the `videos` table and enum lifecycle but not the individual columns, the unique slug index or the channel FK. Those are exercised by `video.entity.integration-spec.ts` against a `synchronize` schema, so a drift between migration and entity would not be caught there; the migration was compared by hand and matches the entity column for column.
-- Observed, not changed: the 10GiB ceiling is verified by design (presigned multipart, bytes never cross the API, part count bounded, stored size re-checked) and by tests with a small real clip. No test uploads a 10GiB object.
-- Still open from SI-03.12: the parts-endpoint throttle keys on IP rather than user. Scope of Fase 02's global `ThrottlerGuard`.
+- 10GiB smoke run against the real stack (API dev server, MinIO, Redis, `video-worker`), client inside the `nestjs-api` container so the presigned `minio:9000` URLs resolve. Payload: the generated 3s clip with `+faststart` followed by zeros up to exactly `VIDEO_MAX_UPLOAD_BYTES`; the object was deleted afterwards. Not a permanent test: it needs 10GiB of storage and the running server.
+
+  | Step | Result |
+  |------|--------|
+  | `POST /videos` with `size_bytes` = 10GiB + 1 | `400 VIDEO_TOO_LARGE` |
+  | `POST /videos` with `size_bytes` = 10GiB | `201`, `part_count` 1024 |
+  | 1024 presigned `PUT`s, 8 in flight | 17.3s, 590 MiB/s, no bytes through the API |
+  | `POST .../complete` | `202 processing` |
+  | Worker (`ffprobe` + `ffmpeg` over presigned range reads) | `ready` in 7s, `size_bytes` 10737418240, duration 3, h264/aac metadata |
+  | `Range: bytes=0-99` and `bytes=10737418140-` | `206`, 100 bytes each, correct `Content-Range` |
+  | `Range` past the end | `416`, `Content-Range: bytes */10737418240` |
+  | No `Range` | `200`, `Content-Length` 10737418240, `Accept-Ranges: bytes` |
+  | `GET .../download` | `200`, 10737418240 bytes received in 9.3s, 1104 MiB/s |
+
+  API container memory fell from 918MiB to 775MiB while the 10GiB download was streaming, so nothing is buffered in the process.
+- Closed after the audit: the throttle now keys authenticated requests by the JWT `sub` and anonymous ones by IP (`ThrottlerModule.forRoot({ getTracker })` in `AuthModule`, tracker in `src/auth/throttler-tracker.ts`). The parts endpoint keeps its 60/min allowance, now per user. Covered by `throttler-tracker.spec.ts` and an e2e case where one uploader exhausts the allowance and a second user from the same IP still gets `200`.
