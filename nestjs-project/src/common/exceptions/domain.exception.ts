@@ -76,6 +76,16 @@ export class VideoNotFoundException extends DomainException {
   }
 }
 
+export class InvalidUploadPartException extends DomainException {
+  constructor(maxPartNumber: number) {
+    super(
+      'INVALID_UPLOAD_PART',
+      400,
+      `Part numbers must be between 1 and ${maxPartNumber} for this upload`,
+    );
+  }
+}
+
 export class VideoUploadNotPendingException extends DomainException {
   constructor() {
     super('VIDEO_UPLOAD_NOT_PENDING', 409, 'Video upload is no longer pending');

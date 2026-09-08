@@ -10,6 +10,7 @@ import { isUniqueViolationOnColumn } from '../common/database/pg-error.util';
 import {
   ChannelNotFoundException,
   InvalidRangeException,
+  InvalidUploadPartException,
   ThumbnailNotAvailableException,
   UnsupportedVideoTypeException,
   VideoNotFoundException,
@@ -29,6 +30,7 @@ import { generateVideoSlug } from './video-slug.util';
 import {
   VIDEO_MAX_PARTS,
   VIDEO_PROCESSING_JOB,
+  VIDEO_SOURCE_PREFIX,
   VIDEO_PROCESSING_QUEUE,
   VIDEO_SLUG_MAX_ATTEMPTS,
   VideoStatus,
@@ -42,6 +44,11 @@ import type {
 } from './videos.types';
 
 const SLUG_COLUMN = 'slug';
+const NO_SUCH_UPLOAD = 'NoSuchUpload';
+
+function isNoSuchUpload(error: unknown): boolean {
+  return (error as { name?: string }).name === NO_SUCH_UPLOAD;
+}
 
 @Injectable()
 export class VideosService {
@@ -125,6 +132,14 @@ export class VideosService {
     const video = await this.findPendingUploadForOwner(userId, videoId);
     const expiresIn = this.config.uploadUrlExpirationSeconds;
 
+    // The declared size fixes how many parts this upload can have. Without this
+    // bound a caller could presign parts 1..10000 for a one-part draft and write
+    // far more than the size limit allows.
+    const maxPartNumber = this.partCountFor(video.size_bytes);
+    if (partNumbers.some((partNumber) => partNumber > maxPartNumber)) {
+      throw new InvalidUploadPartException(maxPartNumber);
+    }
+
     return Promise.all(
       partNumbers.map(async (partNumber) => ({
         part_number: partNumber,
@@ -145,36 +160,88 @@ export class VideosService {
     dto: CompleteUploadDto,
   ): Promise<VideoUploadStatus> {
     const video = await this.findPendingUploadForOwner(userId, videoId);
+    const uploadId = video.upload_id as string;
 
-    await this.storageService.completeMultipartUpload(
-      video.source_key,
-      video.upload_id as string,
-      dto.parts.map((part) => ({
-        partNumber: part.part_number,
-        etag: part.etag,
-      })),
+    // Claiming the transition in one conditional UPDATE serialises concurrent
+    // completions: the loser sees zero affected rows and gets the same 409 a
+    // sequential second call would get.
+    const claim = await this.videoRepository.update(
+      { id: video.id, status: VideoStatus.DRAFT },
+      { status: VideoStatus.PROCESSING },
     );
+    if (!claim.affected) {
+      throw new VideoUploadNotPendingException();
+    }
+
+    try {
+      await this.storageService.completeMultipartUpload(
+        video.source_key,
+        uploadId,
+        dto.parts.map((part) => ({
+          partNumber: part.part_number,
+          etag: part.etag,
+        })),
+      );
+    } catch (error) {
+      // Nothing was stored, so the draft is still completable — hand it back.
+      await this.videoRepository.update(
+        { id: video.id },
+        { status: VideoStatus.DRAFT },
+      );
+      if (isNoSuchUpload(error)) {
+        throw new VideoUploadNotPendingException();
+      }
+      throw error;
+    }
 
     // The client declared a size at creation; storage knows the real one.
     const stored = await this.storageService.headObject(video.source_key);
+
+    if (stored.contentLength > this.config.maxUploadBytes) {
+      await this.storageService.deletePrefix(
+        `${VIDEO_SOURCE_PREFIX}/${video.id}/`,
+      );
+      await this.videoRepository.update(
+        { id: video.id },
+        {
+          status: VideoStatus.FAILED,
+          upload_id: null,
+          processing_error: 'Uploaded bytes exceed the maximum allowed size',
+        },
+      );
+      throw new VideoTooLargeException();
+    }
 
     video.status = VideoStatus.PROCESSING;
     video.size_bytes = stored.contentLength;
     video.upload_id = null;
     await this.videoRepository.save(video);
 
-    await this.processingQueue.add(
-      VIDEO_PROCESSING_JOB,
-      { videoId: video.id },
-      {
-        // Keying the job by video id makes a repeated completion a no-op
-        // instead of a second unit of the same work.
-        jobId: video.id,
-        attempts: this.config.processingAttempts,
-        backoff: { type: 'exponential', delay: 2000 },
-        removeOnComplete: true,
-      },
-    );
+    try {
+      await this.processingQueue.add(
+        VIDEO_PROCESSING_JOB,
+        { videoId: video.id },
+        {
+          // Keying the job by video id makes a repeated completion a no-op
+          // instead of a second unit of the same work.
+          jobId: video.id,
+          attempts: this.config.processingAttempts,
+          backoff: { type: 'exponential', delay: 2000 },
+          removeOnComplete: true,
+        },
+      );
+    } catch (error) {
+      // Without this the video would sit in `processing` forever, waiting for a
+      // job nobody published.
+      await this.videoRepository.update(
+        { id: video.id },
+        {
+          status: VideoStatus.FAILED,
+          processing_error: `Could not enqueue the processing job: ${(error as Error).message}`,
+        },
+      );
+      throw error;
+    }
 
     return { id: video.id, slug: video.slug, status: video.status };
   }
@@ -255,6 +322,10 @@ export class VideosService {
     }
 
     return video;
+  }
+
+  private partCountFor(sizeBytes: number): number {
+    return Math.ceil(sizeBytes / this.config.uploadPartSizeBytes);
   }
 
   private async persistDraft(draft: Partial<Video>): Promise<Video> {

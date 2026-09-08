@@ -248,6 +248,20 @@ describe('Videos (e2e)', () => {
       expect(response.body.error).toBe('VIDEO_NOT_FOUND');
     }, 60000);
 
+    it('refuses part numbers beyond what the declared size allows', async () => {
+      const token = await signIn();
+      // 20MiB with the default 10MiB part size is exactly two parts.
+      const draft = await createDraft(token);
+
+      const response = await request(app.getHttpServer())
+        .post(`/videos/${draft.id}/uploads/parts`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ part_numbers: [1, 2, 3] })
+        .expect(400);
+
+      expect(response.body.error).toBe('INVALID_UPLOAD_PART');
+    }, 120000);
+
     it('rejects a malformed video id', async () => {
       const token = await signIn();
 
@@ -560,7 +574,8 @@ describe('Videos (e2e)', () => {
         .expect(200);
 
       expect(response.headers['content-disposition']).toBe(
-        `attachment; filename="${VALID_BODY.title}.mp4"`,
+        `attachment; filename="${VALID_BODY.title}.mp4"; ` +
+          `filename*=UTF-8''${encodeURIComponent(`${VALID_BODY.title}.mp4`)}`,
       );
       expect(response.headers['content-length']).toBe(
         String(clip.buffer.length),

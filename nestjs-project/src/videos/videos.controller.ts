@@ -7,6 +7,7 @@ import {
   Headers,
   HttpCode,
   HttpStatus,
+  Logger,
   Param,
   ParseUUIDPipe,
   Post,
@@ -28,7 +29,8 @@ import { CompleteUploadDto } from './dto/complete-upload.dto';
 import { CreateVideoDto } from './dto/create-video.dto';
 import { PresignPartsDto } from './dto/presign-parts.dto';
 import { toVideoResponse, VideoResponseDto } from './dto/video-response.dto';
-import { downloadFilename } from './download-filename.util';
+import { contentDispositionAttachment } from './download-filename.util';
+import { pipeToResponse } from './stream-response.util';
 import { VideosService } from './videos.service';
 import type {
   CreatedVideo,
@@ -40,6 +42,8 @@ import type {
 @ApiBearerAuth('access-token')
 @Controller('videos')
 export class VideosController {
+  private readonly logger = new Logger(VideosController.name);
+
   constructor(private readonly videosService: VideosService) {}
 
   @Post()
@@ -260,7 +264,13 @@ export class VideosController {
     response.status(HttpStatus.OK);
     response.setHeader('Content-Type', thumbnail.contentType ?? 'image/jpeg');
     response.setHeader('Content-Length', thumbnail.contentLength);
-    thumbnail.body.pipe(response);
+
+    await pipeToResponse(
+      thumbnail.body,
+      response,
+      this.logger,
+      `thumbnail ${slug}`,
+    );
   }
 
   @Get(':slug/stream')
@@ -316,7 +326,7 @@ export class VideosController {
       response.status(HttpStatus.OK);
     }
 
-    stream.body.pipe(response);
+    await pipeToResponse(stream.body, response, this.logger, `video ${slug}`);
   }
 
   @Get(':slug/download')
@@ -353,10 +363,15 @@ export class VideosController {
     response.setHeader('Content-Length', stream.contentLength);
     response.setHeader(
       'Content-Disposition',
-      `attachment; filename="${downloadFilename(stream.video)}"`,
+      contentDispositionAttachment(stream.video),
     );
 
-    stream.body.pipe(response);
+    await pipeToResponse(
+      stream.body,
+      response,
+      this.logger,
+      `download ${slug}`,
+    );
   }
 
   @Delete(':id/uploads')

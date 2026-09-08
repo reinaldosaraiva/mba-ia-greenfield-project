@@ -1,7 +1,7 @@
 # phase-03-videos — Progress
 
 **Status:** completed
-**SIs:** 11/11 completed
+**SIs:** 12/12 completed
 
 ### SI-03.1 — Dependências, namespaces de configuração e serviços de infraestrutura
 - **Status:** completed
@@ -90,14 +90,25 @@
   - The architecture diagram also had two relations that no longer described the code: `frontend -> storage` now reads "Uploads parts" (the presigned multipart path, which is what the client really does) and `api -> storage` reads "Presigns and reads ranges". Streaming comes back through the API per `phase-03-videos/TD-08`.
   - Every path cited in the two CLAUDE.md files was verified against the filesystem and against the routes the controller declares.
 
+### SI-03.12 — Correções da revisão de código e segurança (amendment)
+- **Status:** completed
+- **Tests:** 254 unit/integration + 79 e2e passing (videos.service.spec.ts: 22, ffmpeg.service.integration-spec.ts: 6, download-filename.util.spec.ts: 9, videos.e2e-spec.ts: 27)
+- **Observations:**
+  - `code-reviewer` and `security-auditor` ran over the completed diff in fresh contexts. Verdicts: one CRITICAL and four warnings from the code review, two MEDIUM and three LOW from the security audit. Both confirmed authorization, Range semantics and mass-assignment handling as clean.
+  - CRITICAL, fixed: the three delivery handlers piped the AWS SDK `Readable` straight into Express with no `error` listener. An upstream storage error is an unhandled stream error, which Node raises as an `uncaughtException` — it would have taken the whole API down, and every client disconnect leaked the storage socket. Replaced with `node:stream/promises` `pipeline`, which tears both ends down.
+  - MEDIUM, fixed: `ffprobe`/`ffmpeg` ran with the default protocol set on attacker-controlled bytes, so an HLS or concat "video" referencing `file:///etc/passwd` or an internal endpoint would have been dereferenced by the worker. Added `-protocol_whitelist https,tls,tcp,http`, process timeouts and `-rw_timeout`, plus a regression test that feeds exactly such a playlist. This forced the FFmpeg spec to serve its fixture over HTTP, which is what production does anyway.
+  - MEDIUM, fixed: the 10GiB cap only ever checked the client's declared size. Part numbers are now bounded to the draft's own part count, and the bytes actually stored are re-checked at completion.
+  - Fixed alongside: concurrent completion is serialised by a conditional UPDATE; a failed storage completion returns the video to `draft`; an enqueue failure marks the video `failed` instead of stranding it in `processing`; `Content-Disposition` uses the RFC 6266 form so a non-Latin-1 title cannot make `setHeader` throw mid-response.
+  - Accepted, not fixed: the parts-endpoint throttle keys on IP rather than the authenticated user (security LOW). Changing it means replacing the global `ThrottlerGuard` registered by `AuthModule`, which belongs to Fase 02's scope. With the part-count bound in place the amplification it enabled is gone. Recorded as a follow-up.
+
 ## Definition of Done
 
 | Gate | Command | Result |
 |------|---------|--------|
-| Unit + integration suite | `docker compose exec nestjs-api npm test -- --runInBand` | 243 passing, 38 suites |
-| E2E suite | `docker compose exec nestjs-api npm run test:e2e` | 78 passing, 4 suites |
+| Unit + integration suite | `docker compose exec nestjs-api npm test -- --runInBand` | 254 passing, 38 suites |
+| E2E suite | `docker compose exec nestjs-api npm run test:e2e` | 79 passing, 4 suites |
 | Type check | `docker compose exec nestjs-api npx tsc --noEmit` | exit 0 |
 | Lint | `docker compose exec nestjs-api npm run lint` | exit 0 |
 | Build | `docker compose exec nestjs-api npm run build` | exit 0 |
 
-Baseline before the phase was 144 unit/integration + 52 e2e, so Phase 03 added 99 unit/integration and 26 e2e tests.
+Baseline before the phase was 144 unit/integration + 52 e2e, so Phase 03 added 110 unit/integration and 27 e2e tests.

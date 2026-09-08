@@ -5,6 +5,7 @@ import { QueryFailedError } from 'typeorm';
 import { ChannelsService } from '../channels/channels.service';
 import {
   ChannelNotFoundException,
+  InvalidUploadPartException,
   ThumbnailNotAvailableException,
   UnsupportedVideoTypeException,
   VideoNotFoundException,
@@ -56,6 +57,7 @@ describe('VideosService', () => {
     save: jest.Mock;
     findOne: jest.Mock;
     delete: jest.Mock;
+    update: jest.Mock;
   };
   let channelsService: { findByUserId: jest.Mock };
   let storageService: {
@@ -63,6 +65,7 @@ describe('VideosService', () => {
     abortMultipartUpload: jest.Mock;
     completeMultipartUpload: jest.Mock;
     headObject: jest.Mock;
+    deletePrefix: jest.Mock;
     presignUploadPart: jest.Mock;
   };
   let processingQueue: { add: jest.Mock };
@@ -73,6 +76,7 @@ describe('VideosService', () => {
       save: jest.fn((value: Video) => Promise.resolve(value)),
       findOne: jest.fn(),
       delete: jest.fn(),
+      update: jest.fn().mockResolvedValue({ affected: 1 }),
     };
     channelsService = {
       findByUserId: jest.fn().mockResolvedValue({ id: CHANNEL_ID }),
@@ -82,6 +86,7 @@ describe('VideosService', () => {
       abortMultipartUpload: jest.fn().mockResolvedValue(undefined),
       completeMultipartUpload: jest.fn().mockResolvedValue(undefined),
       headObject: jest.fn().mockResolvedValue({ contentLength: 4242 }),
+      deletePrefix: jest.fn().mockResolvedValue(undefined),
       presignUploadPart: jest
         .fn()
         .mockImplementation((_key, _upload, partNumber: number) =>
@@ -186,6 +191,7 @@ describe('VideosService', () => {
         status: VideoStatus.DRAFT,
         upload_id: 'upload-1',
         source_key: 'videos/x/source.mp4',
+        size_bytes: 20 * 1024 * 1024,
       });
 
       const parts = await service.presignParts(USER_ID, VIDEO_ID, [1, 2]);
@@ -216,6 +222,24 @@ describe('VideosService', () => {
       await expect(
         service.presignParts(USER_ID, VIDEO_ID, [1]),
       ).rejects.toBeInstanceOf(VideoNotFoundException);
+    });
+
+    it('refuses a part number beyond what the declared size allows', async () => {
+      repository.findOne.mockResolvedValue({
+        id: VIDEO_ID,
+        channel_id: CHANNEL_ID,
+        status: VideoStatus.DRAFT,
+        upload_id: 'upload-1',
+        source_key: 'videos/x/source.mp4',
+        // 20MiB with a 10MiB part size is exactly two parts.
+        size_bytes: 20 * 1024 * 1024,
+      });
+
+      await expect(
+        service.presignParts(USER_ID, VIDEO_ID, [1, 2, 3]),
+      ).rejects.toBeInstanceOf(InvalidUploadPartException);
+
+      expect(storageService.presignUploadPart).not.toHaveBeenCalled();
     });
 
     it('rejects a video whose upload is no longer pending', async () => {
@@ -310,6 +334,79 @@ describe('VideosService', () => {
       ).rejects.toBeInstanceOf(VideoUploadNotPendingException);
 
       expect(processingQueue.add).not.toHaveBeenCalled();
+    });
+
+    it('rejects the loser of a concurrent completion', async () => {
+      repository.findOne.mockResolvedValue(pendingVideo());
+      repository.update.mockResolvedValueOnce({ affected: 0 });
+
+      await expect(
+        service.completeUpload(USER_ID, VIDEO_ID, {
+          parts: [{ part_number: 1, etag: 'one' }],
+        }),
+      ).rejects.toBeInstanceOf(VideoUploadNotPendingException);
+
+      expect(storageService.completeMultipartUpload).not.toHaveBeenCalled();
+      expect(processingQueue.add).not.toHaveBeenCalled();
+    });
+
+    it('hands the draft back when the storage completion fails', async () => {
+      repository.findOne.mockResolvedValue(pendingVideo());
+      storageService.completeMultipartUpload.mockRejectedValue(
+        new Error('storage is down'),
+      );
+
+      await expect(
+        service.completeUpload(USER_ID, VIDEO_ID, {
+          parts: [{ part_number: 1, etag: 'one' }],
+        }),
+      ).rejects.toThrow('storage is down');
+
+      expect(repository.update).toHaveBeenLastCalledWith(
+        { id: VIDEO_ID },
+        { status: VideoStatus.DRAFT },
+      );
+    });
+
+    it('discards an upload whose stored bytes exceed the maximum', async () => {
+      repository.findOne.mockResolvedValue(pendingVideo());
+      storageService.headObject.mockResolvedValue({
+        contentLength: CONFIG.maxUploadBytes + 1,
+      });
+
+      await expect(
+        service.completeUpload(USER_ID, VIDEO_ID, {
+          parts: [{ part_number: 1, etag: 'one' }],
+        }),
+      ).rejects.toBeInstanceOf(VideoTooLargeException);
+
+      expect(storageService.deletePrefix).toHaveBeenCalledWith(
+        `videos/${VIDEO_ID}/`,
+      );
+      expect(repository.update).toHaveBeenLastCalledWith(
+        { id: VIDEO_ID },
+        expect.objectContaining({ status: VideoStatus.FAILED }),
+      );
+      expect(processingQueue.add).not.toHaveBeenCalled();
+    });
+
+    it('marks the video failed when the job cannot be enqueued', async () => {
+      repository.findOne.mockResolvedValue(pendingVideo());
+      processingQueue.add.mockRejectedValue(new Error('redis is down'));
+
+      await expect(
+        service.completeUpload(USER_ID, VIDEO_ID, {
+          parts: [{ part_number: 1, etag: 'one' }],
+        }),
+      ).rejects.toThrow('redis is down');
+
+      expect(repository.update).toHaveBeenLastCalledWith(
+        { id: VIDEO_ID },
+        expect.objectContaining({
+          status: VideoStatus.FAILED,
+          processing_error: expect.stringContaining('redis is down'),
+        }),
+      );
     });
   });
 

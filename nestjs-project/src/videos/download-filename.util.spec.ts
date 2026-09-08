@@ -1,5 +1,8 @@
 import type { Video } from './entities/video.entity';
-import { downloadFilename } from './download-filename.util';
+import {
+  contentDispositionAttachment,
+  downloadFilename,
+} from './download-filename.util';
 
 function makeVideo(overrides: Partial<Video> = {}): Video {
   return {
@@ -21,6 +24,12 @@ describe('downloadFilename', () => {
     );
   });
 
+  it('drops characters Node refuses to write in a header', () => {
+    expect(downloadFilename(makeVideo({ title: 'Férias 2026 🎬' }))).toBe(
+      'Frias 2026.mov',
+    );
+  });
+
   it('falls back to the slug when the title has nothing usable left', () => {
     expect(downloadFilename(makeVideo({ title: '///' }))).toBe(
       'Kx7mQ2rTb9A.mov',
@@ -34,8 +43,34 @@ describe('downloadFilename', () => {
   });
 
   it('caps a very long title', () => {
-    const name = downloadFilename(makeVideo({ title: 'x'.repeat(300) }));
+    expect(downloadFilename(makeVideo({ title: 'x'.repeat(300) }))).toBe(
+      `${'x'.repeat(100)}.mov`,
+    );
+  });
+});
 
-    expect(name).toBe(`${'x'.repeat(100)}.mov`);
+describe('contentDispositionAttachment', () => {
+  it('emits both the ASCII fallback and the UTF-8 form', () => {
+    expect(contentDispositionAttachment(makeVideo())).toBe(
+      `attachment; filename="My holiday clip.mov"; filename*=UTF-8''My%20holiday%20clip.mov`,
+    );
+  });
+
+  it('keeps the accented name in the UTF-8 form only', () => {
+    const header = contentDispositionAttachment(makeVideo({ title: 'Férias' }));
+
+    expect(header).toContain('filename="Frias.mov"');
+    expect(header).toContain(
+      `filename*=UTF-8''${encodeURIComponent('Férias.mov')}`,
+    );
+  });
+
+  it('produces a header Node accepts', () => {
+    const header = contentDispositionAttachment(
+      makeVideo({ title: 'Férias 2026 🎬\r\nX-Injected: 1' }),
+    );
+
+    expect(header).not.toMatch(/[\r\n]/);
+    expect(() => Buffer.from(header, 'latin1')).not.toThrow();
   });
 });

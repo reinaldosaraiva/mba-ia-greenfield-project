@@ -8,6 +8,19 @@ const execFileAsync = promisify(execFile);
 const PROBE_MAX_BUFFER = 8 * 1024 * 1024;
 const THUMBNAIL_MAX_BUFFER = 32 * 1024 * 1024;
 const THUMBNAIL_WIDTH = 640;
+const PROCESS_TIMEOUT_MS = 120_000;
+const IO_TIMEOUT_MICROSECONDS = '30000000';
+
+// The source bytes are fully attacker-controlled: a "video" can be an HLS
+// playlist or a concat script whose entries point at file:// paths or internal
+// HTTP endpoints, and FFmpeg would follow them. Restricting the protocol set to
+// what a presigned storage read needs closes that off.
+const PROTOCOL_WHITELIST = ['-protocol_whitelist', 'https,tls,tcp,http'];
+
+const EXEC_OPTIONS = {
+  timeout: PROCESS_TIMEOUT_MS,
+  killSignal: 'SIGKILL' as const,
+};
 
 export interface ProbeResult {
   durationSeconds: number;
@@ -38,13 +51,16 @@ export class FfmpegService {
       [
         '-v',
         'error',
+        ...PROTOCOL_WHITELIST,
+        '-rw_timeout',
+        IO_TIMEOUT_MICROSECONDS,
         '-print_format',
         'json',
         '-show_format',
         '-show_streams',
         input,
       ],
-      { maxBuffer: PROBE_MAX_BUFFER },
+      { ...EXEC_OPTIONS, maxBuffer: PROBE_MAX_BUFFER },
     );
 
     const parsed = JSON.parse(stdout) as FfprobeOutput;
@@ -84,6 +100,9 @@ export class FfmpegService {
         '-nostdin',
         '-v',
         'error',
+        ...PROTOCOL_WHITELIST,
+        '-rw_timeout',
+        IO_TIMEOUT_MICROSECONDS,
         // Seeking before -i is an input seek: ffmpeg jumps straight to the
         // keyframe instead of decoding everything before it.
         '-ss',
@@ -100,7 +119,7 @@ export class FfmpegService {
         'image2',
         'pipe:1',
       ],
-      { encoding: 'buffer', maxBuffer: THUMBNAIL_MAX_BUFFER },
+      { ...EXEC_OPTIONS, encoding: 'buffer', maxBuffer: THUMBNAIL_MAX_BUFFER },
     );
 
     if (stdout.length === 0) {

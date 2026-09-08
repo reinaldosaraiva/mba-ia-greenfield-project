@@ -344,6 +344,41 @@ Deliver the video ingestion pipeline end to end — a draft row created the mome
 
 ---
 
+### SI-03.12 — Correções da revisão de código e segurança (amendment)
+
+**Description:** Amendment SI closing the findings raised by the `code-reviewer` and `security-auditor` passes over the completed phase. It changes no contract except adding the `INVALID_UPLOAD_PART` error and the RFC 6266 `Content-Disposition` form; every other change hardens behavior that was already specified.
+
+**Technical actions:**
+
+- Replace the raw `readable.pipe(response)` in the thumbnail, stream and download handlers with a `node:stream/promises` `pipeline` helper (`src/videos/stream-response.util.ts`): an unhandled `error` on the storage stream was an `uncaughtException` that would take the API process down, and a client disconnect leaked the upstream storage socket
+- Constrain `ffprobe` and `ffmpeg` to `https,tls,tcp,http` via `-protocol_whitelist` and add process timeouts plus `-rw_timeout`: the source bytes are attacker-controlled, and an HLS or concat "video" whose entries point at `file://` or an internal endpoint would otherwise be dereferenced by the worker
+- Bound the part numbers `POST /videos/:id/uploads/parts` will presign to `ceil(size_bytes / part_size)` for that draft (new `InvalidUploadPartException`), and reject at completion when the bytes actually stored exceed the maximum — the size limit was only checked against the client's declaration
+- Claim the `draft → processing` transition with one conditional `UPDATE` so two concurrent completions produce a deterministic `409`; hand the draft back when the storage completion fails, and mark the video `failed` when the processing job cannot be enqueued instead of stranding it in `processing`
+- Emit `Content-Disposition` in the RFC 6266 form (`filename` ASCII fallback + `filename*=UTF-8''…`), because a title outside Latin-1 made `setHeader` throw mid-response
+
+**Tests:**
+
+| File | Layer | Verifies |
+|------|-------|----------|
+| `src/videos/videos.service.spec.ts` | Unit | Part numbers beyond the draft's part count are refused; the loser of a concurrent completion gets 409; a failed storage completion returns the video to `draft`; oversized stored bytes discard the object and mark the video failed; an enqueue failure marks the video failed |
+| `src/videos/processing/ffmpeg.service.integration-spec.ts` | Integration | Probing and thumbnailing read the source over HTTP; a playlist embedding a `file://` reference is refused by the protocol whitelist |
+| `src/videos/download-filename.util.spec.ts` | Unit | Non-Latin-1 titles are dropped from the ASCII fallback, preserved in the UTF-8 form, and the emitted header carries no CR/LF |
+| `test/videos.e2e-spec.ts` | E2E | The parts endpoint returns `400 INVALID_UPLOAD_PART` past the declared part count; download returns the RFC 6266 header |
+
+**Dependencies:** SI-03.11
+
+**Acceptance criteria:**
+
+- A storage failure mid-stream does not terminate the API process, and a client disconnect destroys the upstream storage stream
+- `ffprobe` on a playlist whose segment is `file:///etc/passwd` fails instead of reading the file
+- `POST /videos/:id/uploads/parts` with a part number above `ceil(size_bytes / part_size)` returns `400` with `errorCode: "INVALID_UPLOAD_PART"`
+- Completing an upload whose stored bytes exceed the maximum returns `400 VIDEO_TOO_LARGE`, removes the stored object and leaves the video `failed`
+- Two concurrent completions of the same upload produce exactly one `202` and one `409`
+- A video whose processing job cannot be enqueued ends `failed` with a reason, never stuck in `processing`
+- `GET /videos/:slug/download` of a video whose title is outside Latin-1 returns `200` with a valid `Content-Disposition`
+
+---
+
 ## Technical Specifications
 
 ### Data Model
@@ -420,6 +455,7 @@ Returns one presigned `UploadPart` URL per requested part number. Called repeate
 - parts: array of `{ part_number: integer, url: string, expires_in: integer }`
 
 **Error responses:**
+- 400 INVALID_UPLOAD_PART: when a requested part number exceeds `ceil(size_bytes / part_size)` for this upload
 - 409 VIDEO_UPLOAD_NOT_PENDING: when the video is no longer `draft`
 - 404 VIDEO_NOT_FOUND: when the id is unknown or the video belongs to another channel
 - 400 validation error: when the body fails schema validation
@@ -442,7 +478,8 @@ Returns one presigned `UploadPart` URL per requested part number. Called repeate
 - status: string — always `"processing"`
 
 **Error responses:**
-- 409 VIDEO_UPLOAD_NOT_PENDING: when the video is no longer `draft`
+- 400 VIDEO_TOO_LARGE: when the bytes actually stored exceed the maximum; the object is discarded and the video is marked `failed`
+- 409 VIDEO_UPLOAD_NOT_PENDING: when the video is no longer `draft`, including the loser of two concurrent completions
 - 404 VIDEO_NOT_FOUND: when the id is unknown or the video belongs to another channel
 - 400 validation error: when the body fails schema validation
 - 401: when the access token is missing or invalid
@@ -572,6 +609,7 @@ A non-owner receives `404`, never `403`: the two responses are byte-identical to
 | UNSUPPORTED_VIDEO_TYPE | 415 | POST /videos with a `mime_type` outside the allowlist |
 | CHANNEL_NOT_FOUND | 404 | POST /videos when the authenticated user has no channel |
 | VIDEO_NOT_FOUND | 404 | Any route addressing a video that does not exist or belongs to another channel |
+| INVALID_UPLOAD_PART | 400 | Part presigning for a part number beyond what the declared size allows |
 | VIDEO_UPLOAD_NOT_PENDING | 409 | Part presigning, completion or abort on a video that is no longer `draft` |
 | VIDEO_NOT_READY | 409 | Stream or download on a video whose status is not `ready` |
 | THUMBNAIL_NOT_AVAILABLE | 404 | GET thumbnail before the worker has produced one |
@@ -618,7 +656,7 @@ SI-03.3 + SI-03.4
                 └── SI-03.11 — CLAUDE.md, diagram and OpenAPI
 ```
 
-Linearized implementation order: SI-03.1 → SI-03.2 → SI-03.3 → SI-03.4 → SI-03.5 → SI-03.6 → SI-03.7 → SI-03.8 → SI-03.9 → SI-03.10 → SI-03.11
+Linearized implementation order: SI-03.1 → SI-03.2 → SI-03.3 → SI-03.4 → SI-03.5 → SI-03.6 → SI-03.7 → SI-03.8 → SI-03.9 → SI-03.10 → SI-03.11 → SI-03.12
 
 ---
 
@@ -635,6 +673,7 @@ Linearized implementation order: SI-03.1 → SI-03.2 → SI-03.3 → SI-03.4 →
 - [ ] SI-03.9 — Endpoints de leitura: metadados e thumbnail
 - [ ] SI-03.10 — Streaming com `Range` e download
 - [ ] SI-03.11 — Documentação de IA, diagrama e OpenAPI
+- [ ] SI-03.12 — Correções da revisão de código e segurança (amendment)
 
 **Phase capabilities:**
 

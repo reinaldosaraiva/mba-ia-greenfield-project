@@ -1,23 +1,42 @@
 import type { Video } from './entities/video.entity';
 
-const UNSAFE_CHARACTERS = /["\\\r\n/]/g;
+const NON_ASCII_OR_UNSAFE = /[^\x20-\x7E]|["\\/]/g;
 const DEFAULT_EXTENSION = 'mp4';
 const MAX_BASENAME_LENGTH = 100;
 
-// The filename lands inside a quoted `Content-Disposition` value, so quotes,
-// backslashes, separators and control characters must not survive.
+function extensionOf(video: Video): string {
+  const candidate = video.source_key.split('.').pop();
+  return candidate && /^[a-z0-9]{1,5}$/.test(candidate)
+    ? candidate
+    : DEFAULT_EXTENSION;
+}
+
+// The ASCII form is what old clients read out of the quoted `filename`; anything
+// outside printable ASCII is dropped there because Node rejects non-Latin-1
+// header values, and `setHeader` would throw after the response has started.
 export function downloadFilename(video: Video): string {
   const base =
     video.title
-      .replace(UNSAFE_CHARACTERS, '')
+      .replace(NON_ASCII_OR_UNSAFE, '')
       .trim()
       .slice(0, MAX_BASENAME_LENGTH) || video.slug;
 
-  const sourceExtension = video.source_key.split('.').pop();
-  const extension =
-    sourceExtension && /^[a-z0-9]{1,5}$/.test(sourceExtension)
-      ? sourceExtension
-      : DEFAULT_EXTENSION;
+  return `${base}.${extensionOf(video)}`;
+}
 
-  return `${base}.${extension}`;
+// RFC 6266 §4.1: `filename*` carries the real UTF-8 name for clients that
+// understand it, `filename` stays as the ASCII fallback.
+export function contentDispositionAttachment(video: Video): string {
+  const utf8Name = `${
+    video.title
+      .replace(/[\r\n"\\/]/g, '')
+      .trim()
+      .slice(0, MAX_BASENAME_LENGTH) || video.slug
+  }.${extensionOf(video)}`;
+
+  return [
+    'attachment',
+    `filename="${downloadFilename(video)}"`,
+    `filename*=UTF-8''${encodeURIComponent(utf8Name)}`,
+  ].join('; ');
 }
