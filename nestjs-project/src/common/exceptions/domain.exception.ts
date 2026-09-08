@@ -3,6 +3,9 @@ export abstract class DomainException extends Error {
     public readonly errorCode: string,
     public readonly httpStatus: number,
     message: string,
+    // Some domain errors carry a mandated response header — RFC 9110 requires
+    // `Content-Range` on a 416, for instance.
+    public readonly headers?: Record<string, string>,
   ) {
     super(message);
     this.name = this.constructor.name;
@@ -46,5 +49,65 @@ export class TokenReuseDetectedException extends DomainException {
       401,
       'Token reuse detected — all sessions revoked',
     );
+  }
+}
+
+export class VideoTooLargeException extends DomainException {
+  constructor() {
+    super('VIDEO_TOO_LARGE', 400, 'Video exceeds the maximum allowed size');
+  }
+}
+
+export class UnsupportedVideoTypeException extends DomainException {
+  constructor() {
+    super('UNSUPPORTED_VIDEO_TYPE', 415, 'Video type is not supported');
+  }
+}
+
+export class ChannelNotFoundException extends DomainException {
+  constructor() {
+    super('CHANNEL_NOT_FOUND', 404, 'User has no channel');
+  }
+}
+
+export class VideoNotFoundException extends DomainException {
+  constructor() {
+    super('VIDEO_NOT_FOUND', 404, 'Video not found');
+  }
+}
+
+export class InvalidUploadPartException extends DomainException {
+  constructor(maxPartNumber: number) {
+    super(
+      'INVALID_UPLOAD_PART',
+      400,
+      `Part numbers must be between 1 and ${maxPartNumber} for this upload`,
+    );
+  }
+}
+
+export class VideoUploadNotPendingException extends DomainException {
+  constructor() {
+    super('VIDEO_UPLOAD_NOT_PENDING', 409, 'Video upload is no longer pending');
+  }
+}
+
+export class VideoNotReadyException extends DomainException {
+  constructor() {
+    super('VIDEO_NOT_READY', 409, 'Video is not ready');
+  }
+}
+
+export class ThumbnailNotAvailableException extends DomainException {
+  constructor() {
+    super('THUMBNAIL_NOT_AVAILABLE', 404, 'Thumbnail is not available yet');
+  }
+}
+
+export class InvalidRangeException extends DomainException {
+  constructor(totalSize: number) {
+    super('INVALID_RANGE', 416, 'Requested range is not satisfiable', {
+      'Content-Range': `bytes */${totalSize}`,
+    });
   }
 }

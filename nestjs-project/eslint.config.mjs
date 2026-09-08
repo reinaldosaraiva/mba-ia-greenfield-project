@@ -32,4 +32,24 @@ export default tseslint.config(
       "prettier/prettier": ["error", { endOfLine: "auto" }],
     },
   },
+  {
+    // Test files drive untyped fixtures on purpose: supertest exposes `res.body`
+    // as `any`, `jest.fn()` mocks are structurally untyped, and spied methods are
+    // referenced unbound. The type-checked "unsafe-*" family reports these as
+    // errors on every assertion. Relaxed here only for test files — the same
+    // rules stay fully enforced on every production source file.
+    files: [
+      '**/*.spec.ts',
+      '**/*.integration-spec.ts',
+      '**/*.e2e-spec.ts',
+      'src/test/**/*.ts',
+    ],
+    rules: {
+      '@typescript-eslint/no-unsafe-assignment': 'off',
+      '@typescript-eslint/no-unsafe-call': 'off',
+      '@typescript-eslint/no-unsafe-member-access': 'off',
+      '@typescript-eslint/no-unsafe-return': 'off',
+      '@typescript-eslint/unbound-method': 'off',
+    },
+  },
 );
