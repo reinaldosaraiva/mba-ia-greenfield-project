@@ -1,7 +1,7 @@
 # phase-03-videos — Progress
 
 **Status:** in_progress
-**SIs:** 4/11 completed
+**SIs:** 5/11 completed
 
 ### SI-03.1 — Dependências, namespaces de configuração e serviços de infraestrutura
 - **Status:** completed
@@ -34,9 +34,14 @@
   - `findByUserId` went into `ChannelsService` rather than the videos module, which is the resolution recorded for `DG-1` in validation.md — channel ownership stays behind the channels boundary.
 
 ### SI-03.5 — Início do upload: rascunho automático e URLs de parte
-- **Status:** pending
-- **Tests:** —
-- **Observations:** none
+- **Status:** completed
+- **Tests:** 23/23 passing (videos.service.spec.ts: 10 unit, videos.service.integration-spec.ts: 4 against real DB + MinIO, videos.e2e-spec.ts: 9)
+- **Observations:**
+  - `test/jest-e2e.json` had no worker limit, so e2e specs ran in parallel against the shared database. A fourth data-writing spec made the race visible and broke `auth.e2e-spec.ts` too. Added `maxWorkers: 1`, which is what `nestjs-project/CLAUDE.md` already claimed was configured.
+  - The video id is generated with `randomUUID()` before the insert so the storage key is deterministic and the multipart upload can be opened before the row exists.
+  - `createDraft` aborts the multipart upload when the insert fails; otherwise an open upload would linger in storage with no row pointing at it.
+  - The unique-violation predicate moved from `ChannelsService` to `src/common/database/pg-error.util.ts` so the slug retry and the nickname retry share one implementation instead of duplicating a subtle driver-error check.
+  - The parts endpoint carries its own `@Throttle` allowance: the global 10 req/min auth limit cannot accommodate the batches a 10GiB upload needs.
 
 ### SI-03.6 — Conclusão do upload e publicação do job de processamento
 - **Status:** pending
