@@ -13,6 +13,7 @@ import { AuthService } from './auth.service';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { RefreshToken } from './entities/refresh-token.entity';
 import { VerificationToken } from './entities/verification-token.entity';
+import { throttlerTracker } from './throttler-tracker';
 
 @Module({
   imports: [
@@ -26,7 +27,10 @@ import { VerificationToken } from './entities/verification-token.entity';
       }),
     }),
     TypeOrmModule.forFeature([RefreshToken, VerificationToken]),
-    ThrottlerModule.forRoot([{ ttl: 60000, limit: 10 }]),
+    ThrottlerModule.forRoot({
+      throttlers: [{ ttl: 60000, limit: 10 }],
+      getTracker: throttlerTracker,
+    }),
   ],
   controllers: [AuthController],
   providers: [
