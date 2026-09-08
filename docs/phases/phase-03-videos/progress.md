@@ -1,7 +1,7 @@
 # phase-03-videos — Progress
 
 **Status:** in_progress
-**SIs:** 5/11 completed
+**SIs:** 6/11 completed
 
 ### SI-03.1 — Dependências, namespaces de configuração e serviços de infraestrutura
 - **Status:** completed
@@ -44,9 +44,12 @@
   - The parts endpoint carries its own `@Throttle` allowance: the global 10 req/min auth limit cannot accommodate the batches a 10GiB upload needs.
 
 ### SI-03.6 — Conclusão do upload e publicação do job de processamento
-- **Status:** pending
-- **Tests:** —
-- **Observations:** none
+- **Status:** completed
+- **Tests:** 199 unit/integration + 64 e2e passing (videos.service.spec.ts: 14 unit, videos.service.integration-spec.ts: 5 against real MinIO + Redis, videos.e2e-spec.ts: 12)
+- **Observations:**
+  - `@nestjs/bullmq@12.0.0` declares `"type": "module"` and points its `require` condition at the same ESM entry, so ts-jest failed with `SyntaxError: Unexpected token 'export'`. Pinned the CommonJS 11.x line with `bullmq@^5.81.4`; recorded as a Revision on `phase-03-videos/TD-02` and propagated to context.md and library-refs.md. Same Option A, different pins.
+  - The integration test pauses the queue around the completion so the "exactly one waiting job" assertion cannot race the worker container that will consume the same Redis from SI-03.8 onward.
+  - `size_bytes` is overwritten from `headObject` after completion — the value the client declared is an input to validation, not a fact.
 
 ### SI-03.7 — Worker de vídeo: extração de metadados, thumbnail e status final
 - **Status:** pending

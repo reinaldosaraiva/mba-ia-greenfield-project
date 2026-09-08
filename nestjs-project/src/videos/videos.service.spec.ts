@@ -1,3 +1,4 @@
+import { getQueueToken } from '@nestjs/bullmq';
 import { Test } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { QueryFailedError } from 'typeorm';
@@ -12,7 +13,7 @@ import {
 import videoConfig from '../config/video.config';
 import { StorageService } from '../storage/storage.service';
 import { Video } from './entities/video.entity';
-import { VideoStatus } from './videos.constants';
+import { VIDEO_PROCESSING_QUEUE, VideoStatus } from './videos.constants';
 import { VideosService } from './videos.service';
 
 const CHANNEL_ID = 'ffffffff-ffff-ffff-ffff-ffffffffffff';
@@ -59,8 +60,11 @@ describe('VideosService', () => {
   let storageService: {
     createMultipartUpload: jest.Mock;
     abortMultipartUpload: jest.Mock;
+    completeMultipartUpload: jest.Mock;
+    headObject: jest.Mock;
     presignUploadPart: jest.Mock;
   };
+  let processingQueue: { add: jest.Mock };
 
   beforeEach(async () => {
     repository = {
@@ -75,12 +79,15 @@ describe('VideosService', () => {
     storageService = {
       createMultipartUpload: jest.fn().mockResolvedValue('upload-1'),
       abortMultipartUpload: jest.fn().mockResolvedValue(undefined),
+      completeMultipartUpload: jest.fn().mockResolvedValue(undefined),
+      headObject: jest.fn().mockResolvedValue({ contentLength: 4242 }),
       presignUploadPart: jest
         .fn()
         .mockImplementation((_key, _upload, partNumber: number) =>
           Promise.resolve(`https://storage.local/part/${partNumber}`),
         ),
     };
+    processingQueue = { add: jest.fn().mockResolvedValue(undefined) };
 
     const module = await Test.createTestingModule({
       providers: [
@@ -88,6 +95,10 @@ describe('VideosService', () => {
         { provide: getRepositoryToken(Video), useValue: repository },
         { provide: ChannelsService, useValue: channelsService },
         { provide: StorageService, useValue: storageService },
+        {
+          provide: getQueueToken(VIDEO_PROCESSING_QUEUE),
+          useValue: processingQueue,
+        },
         { provide: videoConfig.KEY, useValue: CONFIG },
       ],
     }).compile();
@@ -218,6 +229,86 @@ describe('VideosService', () => {
       await expect(
         service.presignParts(USER_ID, VIDEO_ID, [1]),
       ).rejects.toBeInstanceOf(VideoUploadNotPendingException);
+    });
+  });
+
+  describe('completeUpload', () => {
+    const pendingVideo = () => ({
+      id: VIDEO_ID,
+      slug: 'abcdefghijk',
+      channel_id: CHANNEL_ID,
+      status: VideoStatus.DRAFT,
+      upload_id: 'upload-1',
+      source_key: 'videos/x/source.mp4',
+      size_bytes: 999,
+    });
+
+    it('forwards the parts sorted by part number', async () => {
+      repository.findOne.mockResolvedValue(pendingVideo());
+
+      await service.completeUpload(USER_ID, VIDEO_ID, {
+        parts: [
+          { part_number: 2, etag: 'two' },
+          { part_number: 1, etag: 'one' },
+        ],
+      });
+
+      expect(storageService.completeMultipartUpload).toHaveBeenCalledWith(
+        'videos/x/source.mp4',
+        'upload-1',
+        [
+          { partNumber: 2, etag: 'two' },
+          { partNumber: 1, etag: 'one' },
+        ],
+      );
+    });
+
+    it('moves the video to processing with the size reported by storage', async () => {
+      repository.findOne.mockResolvedValue(pendingVideo());
+
+      const result = await service.completeUpload(USER_ID, VIDEO_ID, {
+        parts: [{ part_number: 1, etag: 'one' }],
+      });
+
+      expect(result.status).toBe(VideoStatus.PROCESSING);
+      const saved = repository.save.mock.calls[0][0] as Video;
+      expect(saved.status).toBe(VideoStatus.PROCESSING);
+      expect(saved.size_bytes).toBe(4242);
+      expect(saved.upload_id).toBeNull();
+    });
+
+    it('enqueues exactly one job keyed by the video id', async () => {
+      repository.findOne.mockResolvedValue(pendingVideo());
+
+      await service.completeUpload(USER_ID, VIDEO_ID, {
+        parts: [{ part_number: 1, etag: 'one' }],
+      });
+
+      expect(processingQueue.add).toHaveBeenCalledTimes(1);
+      const [, payload, options] = processingQueue.add.mock.calls[0] as [
+        string,
+        { videoId: string },
+        { jobId: string; attempts: number },
+      ];
+      expect(payload).toEqual({ videoId: VIDEO_ID });
+      expect(options.jobId).toBe(VIDEO_ID);
+      expect(options.attempts).toBe(CONFIG.processingAttempts);
+    });
+
+    it('rejects a video whose upload is no longer pending', async () => {
+      repository.findOne.mockResolvedValue({
+        ...pendingVideo(),
+        status: VideoStatus.PROCESSING,
+        upload_id: null,
+      });
+
+      await expect(
+        service.completeUpload(USER_ID, VIDEO_ID, {
+          parts: [{ part_number: 1, etag: 'one' }],
+        }),
+      ).rejects.toBeInstanceOf(VideoUploadNotPendingException);
+
+      expect(processingQueue.add).not.toHaveBeenCalled();
     });
   });
 

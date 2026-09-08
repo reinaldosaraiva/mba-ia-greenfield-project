@@ -9,22 +9,24 @@ libs:
     context7_id: "/aws/aws-sdk-js-v3"
     fetched_at: "2026-09-08T09:42:00-03:00"
   bullmq:
-    version: "^6.3.4"
+    version: "^5.81.4"
     context7_id: "/websites/bullmq_io"
     fetched_at: "2026-09-08T09:42:00-03:00"
   "@nestjs/bullmq":
-    version: "^12.0.0"
+    version: "^11.0.5"
     context7_id: "/nestjs/bull"
     fetched_at: "2026-09-08T09:42:00-03:00"
 sources_mtime:
-  docs/decisions/technical-decisions-phase-03-videos.md: "2026-09-08T09:42:36-03:00"
+  docs/decisions/technical-decisions-phase-03-videos.md: "2026-09-08T10:07:03-03:00"
 ---
 
 # phase-03-videos — Library References
 
 Distilled docs for the libraries this phase pins, pulled via Context7. Re-fetch when the underlying TD changes.
 
-Version compatibility confirmed against the registry from inside the container: `@nestjs/bullmq@12.0.0` declares `peerDependencies` `@nestjs/core: ^10 || ^11 || ^12` and `bullmq: ^3 || ^4 || ^5 || ^6`, so it pairs with the installed NestJS 11 and with `bullmq@6.3.4`.
+Version compatibility confirmed against the registry from inside the container.
+
+**Module-format constraint (revision of TD-02, 2026-09-08).** `@nestjs/bullmq@12.0.0` declares `"type": "module"` and maps its `require` export condition to the same ESM entry, so a CommonJS consumer cannot load it — `ts-jest` fails with `SyntaxError: Unexpected token 'export'`. This project is CommonJS end to end (`sourceType: commonjs` in ESLint, CommonJS emit, `ts-jest` transform), so the pinned pair is `@nestjs/bullmq@^11.0.5` (CommonJS, peer `@nestjs/core: ^10 || ^11`) with `bullmq@^5.81.4` (peer range of the 11.x line). The API below is unchanged between the two lines.
 
 ## @aws-sdk/client-s3
 

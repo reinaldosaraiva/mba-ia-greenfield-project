@@ -1,4 +1,6 @@
 import { INestApplication, ValidationPipe } from '@nestjs/common';
+import { getQueueToken } from '@nestjs/bullmq';
+import { Queue } from 'bullmq';
 import { Test, TestingModule } from '@nestjs/testing';
 import { ThrottlerStorage, ThrottlerStorageService } from '@nestjs/throttler';
 import request from 'supertest';
@@ -10,6 +12,7 @@ import { DomainExceptionFilter } from '../src/common/filters/domain-exception.fi
 import { ValidationExceptionFilter } from '../src/common/filters/validation-exception.filter';
 import { StorageService } from '../src/storage/storage.service';
 import { cleanAllTables } from '../src/test/create-test-data-source';
+import { VIDEO_PROCESSING_QUEUE } from '../src/videos/videos.constants';
 
 const MIN_PART_SIZE = 5 * 1024 * 1024;
 
@@ -26,6 +29,7 @@ describe('Videos (e2e)', () => {
   let dataSource: DataSource;
   let storage: StorageService;
   let throttlerStorage: ThrottlerStorageService;
+  let processingQueue: Queue;
   const touchedPrefixes: string[] = [];
 
   beforeAll(async () => {
@@ -51,6 +55,9 @@ describe('Videos (e2e)', () => {
     storage = moduleFixture.get(StorageService);
     throttlerStorage =
       moduleFixture.get<ThrottlerStorageService>(ThrottlerStorage);
+    processingQueue = moduleFixture.get<Queue>(
+      getQueueToken(VIDEO_PROCESSING_QUEUE),
+    );
   }, 60000);
 
   afterAll(async () => {
@@ -63,6 +70,7 @@ describe('Videos (e2e)', () => {
   beforeEach(async () => {
     await cleanAllTables(dataSource);
     throttlerStorage.storage.clear();
+    await processingQueue.drain();
   });
 
   let userCounter = 0;
@@ -212,6 +220,89 @@ describe('Videos (e2e)', () => {
         .send({ part_numbers: [1] })
         .expect(400);
     }, 60000);
+  });
+
+  async function uploadEveryPart(
+    token: string,
+    videoId: string,
+  ): Promise<{ part_number: number; etag: string }[]> {
+    const presigned = await request(app.getHttpServer())
+      .post(`/videos/${videoId}/uploads/parts`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ part_numbers: [1, 2] })
+      .expect(200);
+
+    const chunks = [Buffer.alloc(MIN_PART_SIZE, 'a'), Buffer.from('tail')];
+    return Promise.all(
+      (presigned.body.parts as { part_number: number; url: string }[]).map(
+        async (part, index) => {
+          const response = await fetch(part.url, {
+            method: 'PUT',
+            body: chunks[index],
+          });
+          expect(response.status).toBe(200);
+          return {
+            part_number: part.part_number,
+            etag: response.headers.get('etag') as string,
+          };
+        },
+      ),
+    );
+  }
+
+  describe('POST /videos/:id/uploads/complete', () => {
+    it('closes the handshake and moves the video to processing', async () => {
+      const token = await signIn();
+      const draft = await createDraft(token);
+      const parts = await uploadEveryPart(token, draft.id);
+
+      const response = await request(app.getHttpServer())
+        .post(`/videos/${draft.id}/uploads/complete`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ parts })
+        .expect(202);
+
+      expect(response.body).toEqual({
+        id: draft.id,
+        slug: draft.slug,
+        status: 'processing',
+      });
+    }, 120000);
+
+    it('rejects a second completion of the same upload', async () => {
+      const token = await signIn();
+      const draft = await createDraft(token);
+      const parts = await uploadEveryPart(token, draft.id);
+
+      await request(app.getHttpServer())
+        .post(`/videos/${draft.id}/uploads/complete`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ parts })
+        .expect(202);
+
+      const response = await request(app.getHttpServer())
+        .post(`/videos/${draft.id}/uploads/complete`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ parts })
+        .expect(409);
+
+      expect(response.body.error).toBe('VIDEO_UPLOAD_NOT_PENDING');
+    }, 120000);
+
+    it('answers a video owned by another user as not found', async () => {
+      const owner = await signIn();
+      const draft = await createDraft(owner);
+      const parts = await uploadEveryPart(owner, draft.id);
+      const stranger = await signIn();
+
+      const response = await request(app.getHttpServer())
+        .post(`/videos/${draft.id}/uploads/complete`)
+        .set('Authorization', `Bearer ${stranger}`)
+        .send({ parts })
+        .expect(404);
+
+      expect(response.body.error).toBe('VIDEO_NOT_FOUND');
+    }, 120000);
   });
 
   describe('DELETE /videos/:id/uploads', () => {

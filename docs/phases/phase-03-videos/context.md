@@ -3,12 +3,12 @@ kind: phase
 name: phase-03-videos
 sources_mtime:
   docs/project-plan.md: "2026-09-08T09:11:03-03:00"
-  docs/decisions/technical-decisions-phase-03-videos.md: "2026-09-08T09:42:36-03:00"
+  docs/decisions/technical-decisions-phase-03-videos.md: "2026-09-08T10:07:03-03:00"
   docs/phases/phase-01-configuracao-base/context.md: "2026-09-08T09:13:57-03:00"
   docs/phases/phase-02-auth/context.md: "2026-09-08T09:13:57-03:00"
   docs/phases/phase-02-auth-frontend/context.md: "2026-09-08T09:13:57-03:00"
   .claude/skills/testing-guide-nestjs-project/SKILL.md: "2026-09-08T09:11:03-03:00"
-  docs/phases/phase-03-videos/library-refs.md: "2026-09-08T09:43:31-03:00"
+  docs/phases/phase-03-videos/library-refs.md: "2026-09-08T10:07:03-03:00"
 ---
 
 # phase-03-videos — Context
@@ -49,7 +49,7 @@ sources_mtime:
 | Ref | Source | Scope | Topic | Status | Decision | Libraries |
 |-----|--------|-------|-------|--------|----------|-----------|
 | phase-03-videos/TD-01 | phase | Backend | Object Storage Client and Bucket/Key Organization | decided | A (AWS SDK v3 + presigner, single bucket with prefixes) | @aws-sdk/client-s3@^3.1127.0, @aws-sdk/s3-request-presigner@^3.1127.0 |
-| phase-03-videos/TD-02 | phase | Backend | Background Job Queue Technology | decided | A (BullMQ over Redis via @nestjs/bullmq) | bullmq@^6.3.4, @nestjs/bullmq@^12.0.0 |
+| phase-03-videos/TD-02 | phase | Backend | Background Job Queue Technology | decided | A (BullMQ over Redis via @nestjs/bullmq) | bullmq@^5.81.4, @nestjs/bullmq@^11.0.5 |
 | phase-03-videos/TD-03 | phase | Cross-layer | Large-File Upload Strategy (up to 10GB) | decided | A (S3 multipart with presigned part URLs) | — |
 | phase-03-videos/TD-04 | phase | Backend | Video Status Lifecycle and Processing-Failure Policy | decided | A (draft → processing → ready \| failed, terminal failure) | — |
 | phase-03-videos/TD-05 | phase | Backend | Video Worker Runtime and Deployment Topology | decided | A (separate Compose service, standalone Nest context) | — |
@@ -91,7 +91,9 @@ _(current-phase TDs — from `docs/decisions/technical-decisions-phase-03-videos
 
 **Recommendation:** BullMQ + Redis — the only option that gives first-party NestJS integration *and* built-in retry/backoff/failed-set semantics, which is exactly the surface TD-04's `failed` status needs. The cost is one Redis container, which is small next to the hand-rolled worker lifecycle a Postgres-backed queue requires and the broker topology RabbitMQ requires. Redis is configured with AOF persistence so a broker restart does not silently drop queued jobs.
 
-**Libraries:** `bullmq@^6.3.4`, `@nestjs/bullmq@^12.0.0`
+**Libraries:** `bullmq@^5.81.4`, `@nestjs/bullmq@^11.0.5`
+
+**Revision (2026-09-08):** version pins moved to the CommonJS-compatible line — `@nestjs/bullmq@12` is ESM-only and cannot be required by this project.
 
 ### phase-03-videos/TD-03
 

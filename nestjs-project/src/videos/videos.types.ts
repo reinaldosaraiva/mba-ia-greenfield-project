@@ -24,3 +24,7 @@ export interface VideoUploadStatus {
   slug: string;
   status: VideoStatus;
 }
+
+export interface VideoProcessingJobData {
+  videoId: string;
+}

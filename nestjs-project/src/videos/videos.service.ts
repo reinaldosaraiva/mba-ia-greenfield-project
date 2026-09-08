@@ -1,6 +1,8 @@
 import { Inject, Injectable } from '@nestjs/common';
+import { InjectQueue } from '@nestjs/bullmq';
 import type { ConfigType } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
+import { Queue } from 'bullmq';
 import { randomUUID } from 'node:crypto';
 import { Repository } from 'typeorm';
 import { ChannelsService } from '../channels/channels.service';
@@ -15,15 +17,23 @@ import {
 import videoConfig from '../config/video.config';
 import { buildSourceKey } from '../storage/object-key.util';
 import { StorageService } from '../storage/storage.service';
+import { CompleteUploadDto } from './dto/complete-upload.dto';
 import { CreateVideoDto } from './dto/create-video.dto';
 import { Video } from './entities/video.entity';
 import { generateVideoSlug } from './video-slug.util';
 import {
   VIDEO_MAX_PARTS,
+  VIDEO_PROCESSING_JOB,
+  VIDEO_PROCESSING_QUEUE,
   VIDEO_SLUG_MAX_ATTEMPTS,
   VideoStatus,
 } from './videos.constants';
-import type { CreatedVideo, PresignedPart } from './videos.types';
+import type {
+  CreatedVideo,
+  PresignedPart,
+  VideoProcessingJobData,
+  VideoUploadStatus,
+} from './videos.types';
 
 const SLUG_COLUMN = 'slug';
 
@@ -34,6 +44,8 @@ export class VideosService {
     private readonly videoRepository: Repository<Video>,
     private readonly channelsService: ChannelsService,
     private readonly storageService: StorageService,
+    @InjectQueue(VIDEO_PROCESSING_QUEUE)
+    private readonly processingQueue: Queue<VideoProcessingJobData>,
     @Inject(videoConfig.KEY)
     private readonly config: ConfigType<typeof videoConfig>,
   ) {}
@@ -119,6 +131,46 @@ export class VideosService {
         expires_in: expiresIn,
       })),
     );
+  }
+
+  async completeUpload(
+    userId: string,
+    videoId: string,
+    dto: CompleteUploadDto,
+  ): Promise<VideoUploadStatus> {
+    const video = await this.findPendingUploadForOwner(userId, videoId);
+
+    await this.storageService.completeMultipartUpload(
+      video.source_key,
+      video.upload_id as string,
+      dto.parts.map((part) => ({
+        partNumber: part.part_number,
+        etag: part.etag,
+      })),
+    );
+
+    // The client declared a size at creation; storage knows the real one.
+    const stored = await this.storageService.headObject(video.source_key);
+
+    video.status = VideoStatus.PROCESSING;
+    video.size_bytes = stored.contentLength;
+    video.upload_id = null;
+    await this.videoRepository.save(video);
+
+    await this.processingQueue.add(
+      VIDEO_PROCESSING_JOB,
+      { videoId: video.id },
+      {
+        // Keying the job by video id makes a repeated completion a no-op
+        // instead of a second unit of the same work.
+        jobId: video.id,
+        attempts: this.config.processingAttempts,
+        backoff: { type: 'exponential', delay: 2000 },
+        removeOnComplete: true,
+      },
+    );
+
+    return { id: video.id, slug: video.slug, status: video.status };
   }
 
   async abortUpload(userId: string, videoId: string): Promise<void> {

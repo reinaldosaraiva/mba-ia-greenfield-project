@@ -76,7 +76,10 @@ _Subprojects in scope:_
 **Recommendation:** **Option A (BullMQ + Redis)** — it is the only option that gives first-party NestJS integration *and* built-in retry/backoff/failed-set semantics, which is exactly the surface TD-04's `failed` status needs. The cost is one Redis container, which is small next to the hand-rolled worker lifecycle that Option B requires and the broker topology Option C requires. Redis is configured with AOF persistence so a broker restart does not silently drop queued jobs.
 
 **Decision:** A (BullMQ over Redis via `@nestjs/bullmq`)
-**Libraries:** `bullmq@^6.3.4`, `@nestjs/bullmq@^12.0.0`
+**Libraries:** `bullmq@^5.81.4`, `@nestjs/bullmq@^11.0.5`
+
+**Revisions:**
+- 2026-09-08 — Pinned `@nestjs/bullmq@^11.0.5` + `bullmq@^5.81.4` instead of the 12.x / 6.x pair originally recorded. Rationale: `@nestjs/bullmq@12.0.0` declares `"type": "module"` and maps its `require` export condition to the same ESM entry, so `ts-jest` fails to parse it in this CommonJS project (`SyntaxError: Unexpected token 'export'`). The 11.x line is CommonJS and its peer range covers the installed NestJS 11; the chosen Option A is unchanged.
 
 ---
 

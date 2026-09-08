@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { BullModule } from '@nestjs/bullmq';
 import { ConfigModule, ConfigType } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { AppController } from './app.controller';
@@ -31,6 +32,13 @@ import { envValidationSchema } from './config/env.validation';
       ],
       validationSchema: envValidationSchema,
       validationOptions: { allowUnknown: true, abortEarly: false },
+    }),
+    BullModule.forRootAsync({
+      imports: [ConfigModule],
+      inject: [queueConfig.KEY],
+      useFactory: (config: ConfigType<typeof queueConfig>) => ({
+        connection: { host: config.host, port: config.port },
+      }),
     }),
     TypeOrmModule.forRootAsync({
       imports: [ConfigModule],

@@ -1,6 +1,8 @@
+import { BullModule } from '@nestjs/bullmq';
 import { ConfigModule } from '@nestjs/config';
 import { Test } from '@nestjs/testing';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import queueConfig from '../config/queue.config';
 import storageConfig from '../config/storage.config';
 import videoConfig from '../config/video.config';
 import {
@@ -17,7 +19,13 @@ describe('VideosModule', () => {
       imports: [
         ConfigModule.forRoot({
           isGlobal: true,
-          load: [storageConfig, videoConfig],
+          load: [queueConfig, storageConfig, videoConfig],
+        }),
+        BullModule.forRoot({
+          connection: {
+            host: process.env.REDIS_HOST ?? 'redis',
+            port: Number(process.env.REDIS_PORT ?? 6379),
+          },
         }),
         TypeOrmModule.forRoot(createTestDataSource(ALL_ENTITIES).options),
         VideosModule,

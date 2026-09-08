@@ -19,10 +19,15 @@ import {
 import type { JwtPayload } from '../auth/auth.types';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { ApiErrorEnvelope } from '../common/openapi/api-error-envelope.dto';
+import { CompleteUploadDto } from './dto/complete-upload.dto';
 import { CreateVideoDto } from './dto/create-video.dto';
 import { PresignPartsDto } from './dto/presign-parts.dto';
 import { VideosService } from './videos.service';
-import type { CreatedVideo, PresignedPart } from './videos.types';
+import type {
+  CreatedVideo,
+  PresignedPart,
+  VideoUploadStatus,
+} from './videos.types';
 
 @ApiTags('videos')
 @ApiBearerAuth('access-token')
@@ -142,6 +147,52 @@ export class VideosController {
       dto.part_numbers,
     );
     return { parts };
+  }
+
+  @Post(':id/uploads/complete')
+  @HttpCode(HttpStatus.ACCEPTED)
+  @ApiOperation({
+    summary: 'Complete a video upload',
+    description:
+      'Closes the multipart upload with the parts the client reported, moves the video to processing and publishes the processing job.',
+  })
+  @ApiResponse({
+    status: 202,
+    description: 'Upload completed and processing enqueued',
+    schema: {
+      properties: {
+        id: { type: 'string', format: 'uuid' },
+        slug: { type: 'string' },
+        status: { type: 'string', example: 'processing' },
+      },
+    },
+  })
+  @ApiResponse({
+    status: 400,
+    description: 'Validation failed',
+    schema: { $ref: getSchemaPath(ApiErrorEnvelope) },
+  })
+  @ApiResponse({
+    status: 401,
+    description: 'Missing or invalid access token',
+    schema: { $ref: getSchemaPath(ApiErrorEnvelope) },
+  })
+  @ApiResponse({
+    status: 404,
+    description: 'Video not found for the caller',
+    schema: { $ref: getSchemaPath(ApiErrorEnvelope) },
+  })
+  @ApiResponse({
+    status: 409,
+    description: 'The upload is no longer pending',
+    schema: { $ref: getSchemaPath(ApiErrorEnvelope) },
+  })
+  async completeUpload(
+    @CurrentUser() user: JwtPayload,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: CompleteUploadDto,
+  ): Promise<VideoUploadStatus> {
+    return this.videosService.completeUpload(user.sub, id, dto);
   }
 
   @Delete(':id/uploads')
