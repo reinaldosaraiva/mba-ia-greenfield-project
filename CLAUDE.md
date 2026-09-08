@@ -12,7 +12,7 @@ This is a monorepo with two main areas:
 
 - `nestjs-project/` — Backend API (NestJS 11, TypeScript, Express). Contains modules for users, channels, videos, comments, etc.
 - `docs/` — Project documentation, architecture diagrams, and planning.
-- `next-frontend/` (Next.js) — not yet initialized
+- `next-frontend/` (Next.js) — frontend application (Fases 01-02 delivered; video screens start in Fase 05)
 
 ## Architecture (C4 Container Diagram)
 
@@ -22,9 +22,42 @@ See `docs/diagrams/software-arch.mermaid` for the full diagram. Key containers:
 - **API** (Nest.js) → business rules, auth, reads/writes DB, uploads to storage, publishes jobs to queue, sends emails
 - **Video Worker** (FFmpeg) → consumes jobs from queue, processes videos, updates DB and storage
 - **Database** (PostgreSQL) → users, channels, videos, comments, likes
-- **Object Storage** (S3/MinIO) → video files and thumbnails
-- **Message Queue** (TBD) → video processing job queue
+- **Object Storage** (MinIO locally, S3-compatible in production) → video source files and thumbnails
+- **Message Queue** (Redis + BullMQ) → video processing job queue
 - **Email Service** (SMTP) → account confirmation and password recovery
+
+## Videos
+
+The videos module (`nestjs-project/src/videos/`) owns video ingestion, processing and delivery. Technical decisions are in `docs/decisions/technical-decisions-phase-03-videos.md`; the executable plan is `docs/phases/phase-03-videos/phase-03-videos.md`.
+
+### Upload handshake (files up to 10GB)
+
+The video bytes never traverse the API process. The client drives a three-call handshake and `PUT`s each chunk straight to object storage with a presigned URL:
+
+1. `POST /videos` — validates the declared file, resolves the caller's channel, allocates the unique slug, opens an S3 multipart upload and persists the video as `draft`. Returns `upload_id`, `part_size` and `part_count`.
+2. `POST /videos/:id/uploads/parts` — returns one presigned `UploadPart` URL per requested part number, in batches of up to 100.
+3. `POST /videos/:id/uploads/complete` — closes the multipart upload with the reported parts, records the size storage actually stored, moves the video to `processing` and publishes the processing job.
+
+`DELETE /videos/:id/uploads` aborts an abandoned upload and discards the draft.
+
+### Status lifecycle
+
+`draft → processing → ready | failed`. The API writes `draft` and `processing`; the worker writes `ready` or, once the retry budget is exhausted, `failed` with a readable `processing_error`. `failed` is terminal.
+
+### Delivery
+
+Every video route is owner-only — the global JWT guard authenticates and the service authorizes against the caller's channel. A video owned by someone else answers `404`, identical to an unknown one.
+
+- `GET /videos/:slug` — metadata and current status, keyed by the unique public identifier.
+- `GET /videos/:slug/thumbnail` — the JPEG the worker extracted.
+- `GET /videos/:slug/stream` — honours HTTP `Range`, answering `206 Partial Content` so playback starts without downloading the whole file.
+- `GET /videos/:slug/download` — the whole file as an attachment.
+
+Visibility (`público` / `unlisted`) and anonymous viewing arrive in Fases 04 and 05; until then no video route is public.
+
+### Worker
+
+`video-worker` is a separate Compose service running a NestJS standalone application context (`src/worker/main.worker.ts`) with no HTTP surface. It consumes the `video-processing` BullMQ queue, reads the source through a short-lived presigned URL so FFmpeg fetches only the bytes it needs over HTTP range requests, extracts duration and metadata with `ffprobe`, cuts a thumbnail with `ffmpeg`, and updates the database and storage.
 
 ## Docker Networking
 

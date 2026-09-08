@@ -1,7 +1,7 @@
 # phase-03-videos — Progress
 
-**Status:** in_progress
-**SIs:** 10/11 completed
+**Status:** completed
+**SIs:** 11/11 completed
 
 ### SI-03.1 — Dependências, namespaces de configuração e serviços de infraestrutura
 - **Status:** completed
@@ -84,6 +84,20 @@
   - The download filename is derived from the title with quotes, backslashes, separators and control characters stripped, falling back to the slug — it lands inside a quoted `Content-Disposition` value.
 
 ### SI-03.11 — Documentação de IA, diagrama e OpenAPI
-- **Status:** pending
-- **Tests:** —
-- **Observations:** none
+- **Status:** completed
+- **Tests:** 243 unit/integration + 78 e2e passing (openapi-export.integration-spec.ts: 11, including the two new cases asserting all eight videos paths and the VideoResponseDto schema)
+- **Observations:**
+  - The architecture diagram also had two relations that no longer described the code: `frontend -> storage` now reads "Uploads parts" (the presigned multipart path, which is what the client really does) and `api -> storage` reads "Presigns and reads ranges". Streaming comes back through the API per `phase-03-videos/TD-08`.
+  - Every path cited in the two CLAUDE.md files was verified against the filesystem and against the routes the controller declares.
+
+## Definition of Done
+
+| Gate | Command | Result |
+|------|---------|--------|
+| Unit + integration suite | `docker compose exec nestjs-api npm test -- --runInBand` | 243 passing, 38 suites |
+| E2E suite | `docker compose exec nestjs-api npm run test:e2e` | 78 passing, 4 suites |
+| Type check | `docker compose exec nestjs-api npx tsc --noEmit` | exit 0 |
+| Lint | `docker compose exec nestjs-api npm run lint` | exit 0 |
+| Build | `docker compose exec nestjs-api npm run build` | exit 0 |
+
+Baseline before the phase was 144 unit/integration + 52 e2e, so Phase 03 added 99 unit/integration and 26 e2e tests.

@@ -128,4 +128,46 @@ describe('exportSpec (integration)', () => {
       }
     }
   });
+
+  it('documents every videos path under the videos tag', () => {
+    const paths = document.paths as Record<
+      string,
+      Record<string, { tags?: string[] }>
+    >;
+
+    const expected = [
+      '/videos',
+      '/videos/{id}/uploads/parts',
+      '/videos/{id}/uploads/complete',
+      '/videos/{id}/uploads',
+      '/videos/{slug}',
+      '/videos/{slug}/thumbnail',
+      '/videos/{slug}/stream',
+      '/videos/{slug}/download',
+    ];
+
+    for (const path of expected) {
+      expect(paths[path]).toBeDefined();
+      for (const operation of Object.values(paths[path])) {
+        expect(operation.tags).toContain('videos');
+      }
+    }
+  });
+
+  it('exposes the VideoResponseDto schema', () => {
+    const components = document.components as Record<string, unknown>;
+    const schemas = components.schemas as Record<
+      string,
+      Record<string, unknown>
+    >;
+
+    expect(schemas['VideoResponseDto']).toBeDefined();
+    const props = schemas['VideoResponseDto'].properties as Record<
+      string,
+      unknown
+    >;
+    expect(props.slug).toBeDefined();
+    expect(props.status).toBeDefined();
+    expect(props.duration_seconds).toBeDefined();
+  });
 });
