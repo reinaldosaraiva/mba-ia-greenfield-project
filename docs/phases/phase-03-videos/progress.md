@@ -1,7 +1,7 @@
 # phase-03-videos — Progress
 
 **Status:** in_progress
-**SIs:** 9/11 completed
+**SIs:** 10/11 completed
 
 ### SI-03.1 — Dependências, namespaces de configuração e serviços de infraestrutura
 - **Status:** completed
@@ -76,9 +76,12 @@
   - `fetch` rejects `Buffer<ArrayBufferLike>` in its BodyInit union; the clip is passed as a `Uint8Array` view.
 
 ### SI-03.10 — Streaming com Range e download
-- **Status:** pending
-- **Tests:** —
-- **Observations:** none
+- **Status:** completed
+- **Tests:** 241 unit/integration + 78 e2e passing (range.util.spec.ts: 11, download-filename.util.spec.ts: 5, videos.e2e-spec.ts: 26)
+- **Observations:**
+  - RFC 9110 requires `Content-Range: bytes */<size>` on a 416, which the generic domain-exception filter had no way to emit. `DomainException` now carries an optional headers map and the filter applies it — additive and backward compatible for every existing exception.
+  - A `Range` header that cannot be parsed is ignored and the whole object is served, per RFC 9110; only a syntactically valid range outside the object produces 416.
+  - The download filename is derived from the title with quotes, backslashes, separators and control characters stripped, falling back to the slug — it lands inside a quoted `Content-Disposition` value.
 
 ### SI-03.11 — Documentação de IA, diagrama e OpenAPI
 - **Status:** pending

@@ -454,6 +454,133 @@ describe('Videos (e2e)', () => {
     }, 120000);
   });
 
+  describe('GET /videos/:slug/stream', () => {
+    async function readyVideo(): Promise<{ token: string; slug: string }> {
+      const token = await signIn();
+      const draft = await createDraft(token, {
+        size_bytes: clip.buffer.length,
+      });
+      await uploadWholeClip(token, draft.id);
+      await waitForStatus(token, draft.slug, 'ready');
+      return { token, slug: draft.slug };
+    }
+
+    it('answers a Range request with 206 and exactly the requested window', async () => {
+      const { token, slug } = await readyVideo();
+
+      const response = await request(app.getHttpServer())
+        .get(`/videos/${slug}/stream`)
+        .set('Authorization', `Bearer ${token}`)
+        .set('Range', 'bytes=0-99')
+        .expect(206);
+
+      expect(response.headers['content-range']).toBe(
+        `bytes 0-99/${clip.buffer.length}`,
+      );
+      expect(response.headers['accept-ranges']).toBe('bytes');
+      expect(response.headers['content-length']).toBe('100');
+      expect(response.body).toHaveLength(100);
+      expect(response.body).toEqual(clip.buffer.subarray(0, 100));
+    }, 180000);
+
+    it('serves the whole object when no Range header is sent', async () => {
+      const { token, slug } = await readyVideo();
+
+      const response = await request(app.getHttpServer())
+        .get(`/videos/${slug}/stream`)
+        .set('Authorization', `Bearer ${token}`)
+        .expect(200);
+
+      expect(response.headers['accept-ranges']).toBe('bytes');
+      expect(response.headers['content-length']).toBe(
+        String(clip.buffer.length),
+      );
+    }, 180000);
+
+    it('rejects a range beyond the object with 416 and the total size', async () => {
+      const { token, slug } = await readyVideo();
+
+      const response = await request(app.getHttpServer())
+        .get(`/videos/${slug}/stream`)
+        .set('Authorization', `Bearer ${token}`)
+        .set('Range', `bytes=${clip.buffer.length + 10}-`)
+        .expect(416);
+
+      expect(response.headers['content-range']).toBe(
+        `bytes */${clip.buffer.length}`,
+      );
+      expect(response.body.error).toBe('INVALID_RANGE');
+    }, 180000);
+
+    it('refuses to stream a video that is not ready', async () => {
+      const token = await signIn();
+      const draft = await createDraft(token);
+
+      const response = await request(app.getHttpServer())
+        .get(`/videos/${draft.slug}/stream`)
+        .set('Authorization', `Bearer ${token}`)
+        .expect(409);
+
+      expect(response.body.error).toBe('VIDEO_NOT_READY');
+    }, 120000);
+
+    it('rejects an unauthenticated request', async () => {
+      const { slug } = await readyVideo();
+
+      await request(app.getHttpServer())
+        .get(`/videos/${slug}/stream`)
+        .expect(401);
+    }, 180000);
+
+    it('answers a video owned by another user as not found', async () => {
+      const { slug } = await readyVideo();
+      const stranger = await signIn();
+
+      const response = await request(app.getHttpServer())
+        .get(`/videos/${slug}/stream`)
+        .set('Authorization', `Bearer ${stranger}`)
+        .expect(404);
+
+      expect(response.body.error).toBe('VIDEO_NOT_FOUND');
+    }, 180000);
+  });
+
+  describe('GET /videos/:slug/download', () => {
+    it('returns the whole file as an attachment', async () => {
+      const token = await signIn();
+      const draft = await createDraft(token, {
+        size_bytes: clip.buffer.length,
+      });
+      await uploadWholeClip(token, draft.id);
+      await waitForStatus(token, draft.slug, 'ready');
+
+      const response = await request(app.getHttpServer())
+        .get(`/videos/${draft.slug}/download`)
+        .set('Authorization', `Bearer ${token}`)
+        .expect(200);
+
+      expect(response.headers['content-disposition']).toBe(
+        `attachment; filename="${VALID_BODY.title}.mp4"`,
+      );
+      expect(response.headers['content-length']).toBe(
+        String(clip.buffer.length),
+      );
+      expect(response.body).toEqual(clip.buffer);
+    }, 180000);
+
+    it('refuses to serve a video that is not ready', async () => {
+      const token = await signIn();
+      const draft = await createDraft(token);
+
+      const response = await request(app.getHttpServer())
+        .get(`/videos/${draft.slug}/download`)
+        .set('Authorization', `Bearer ${token}`)
+        .expect(409);
+
+      expect(response.body.error).toBe('VIDEO_NOT_READY');
+    }, 120000);
+  });
+
   describe('DELETE /videos/:id/uploads', () => {
     it('aborts the upload and discards the draft', async () => {
       const token = await signIn();

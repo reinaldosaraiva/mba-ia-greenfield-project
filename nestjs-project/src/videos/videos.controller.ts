@@ -4,6 +4,7 @@ import {
   Delete,
   Get,
   Header,
+  Headers,
   HttpCode,
   HttpStatus,
   Param,
@@ -27,6 +28,7 @@ import { CompleteUploadDto } from './dto/complete-upload.dto';
 import { CreateVideoDto } from './dto/create-video.dto';
 import { PresignPartsDto } from './dto/presign-parts.dto';
 import { toVideoResponse, VideoResponseDto } from './dto/video-response.dto';
+import { downloadFilename } from './download-filename.util';
 import { VideosService } from './videos.service';
 import type {
   CreatedVideo,
@@ -259,6 +261,102 @@ export class VideosController {
     response.setHeader('Content-Type', thumbnail.contentType ?? 'image/jpeg');
     response.setHeader('Content-Length', thumbnail.contentLength);
     thumbnail.body.pipe(response);
+  }
+
+  @Get(':slug/stream')
+  @ApiOperation({
+    summary: 'Stream the video',
+    description:
+      'Serves the video honouring HTTP Range requests, so playback starts without downloading the whole file.',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Whole object, when no Range header is sent',
+  })
+  @ApiResponse({ status: 206, description: 'The requested byte window' })
+  @ApiResponse({
+    status: 401,
+    description: 'Missing or invalid access token',
+    schema: { $ref: getSchemaPath(ApiErrorEnvelope) },
+  })
+  @ApiResponse({
+    status: 404,
+    description: 'Video not found for the caller',
+    schema: { $ref: getSchemaPath(ApiErrorEnvelope) },
+  })
+  @ApiResponse({
+    status: 409,
+    description: 'The video is not ready yet',
+    schema: { $ref: getSchemaPath(ApiErrorEnvelope) },
+  })
+  @ApiResponse({
+    status: 416,
+    description: 'The requested range cannot be satisfied',
+    schema: { $ref: getSchemaPath(ApiErrorEnvelope) },
+  })
+  async stream(
+    @CurrentUser() user: JwtPayload,
+    @Param('slug') slug: string,
+    @Headers('range') range: string | undefined,
+    @Res() response: Response,
+  ): Promise<void> {
+    const stream = await this.videosService.openStream(user.sub, slug, range);
+
+    response.setHeader('Accept-Ranges', 'bytes');
+    response.setHeader('Content-Type', stream.contentType);
+    response.setHeader('Content-Length', stream.contentLength);
+
+    if (stream.range) {
+      response.setHeader(
+        'Content-Range',
+        `bytes ${stream.range.start}-${stream.range.end}/${stream.totalSize}`,
+      );
+      response.status(HttpStatus.PARTIAL_CONTENT);
+    } else {
+      response.status(HttpStatus.OK);
+    }
+
+    stream.body.pipe(response);
+  }
+
+  @Get(':slug/download')
+  @ApiOperation({
+    summary: 'Download the video',
+    description:
+      'Serves the whole video as an attachment named after the video title.',
+  })
+  @ApiResponse({ status: 200, description: 'The video file as an attachment' })
+  @ApiResponse({
+    status: 401,
+    description: 'Missing or invalid access token',
+    schema: { $ref: getSchemaPath(ApiErrorEnvelope) },
+  })
+  @ApiResponse({
+    status: 404,
+    description: 'Video not found for the caller',
+    schema: { $ref: getSchemaPath(ApiErrorEnvelope) },
+  })
+  @ApiResponse({
+    status: 409,
+    description: 'The video is not ready yet',
+    schema: { $ref: getSchemaPath(ApiErrorEnvelope) },
+  })
+  async download(
+    @CurrentUser() user: JwtPayload,
+    @Param('slug') slug: string,
+    @Res() response: Response,
+  ): Promise<void> {
+    const stream = await this.videosService.openDownload(user.sub, slug);
+
+    response.status(HttpStatus.OK);
+    response.setHeader('Content-Type', stream.contentType);
+    response.setHeader('Content-Length', stream.contentLength);
+    response.setHeader(
+      'Content-Disposition',
+      `attachment; filename="${downloadFilename(stream.video)}"`,
+    );
+
+    stream.body.pipe(response);
   }
 
   @Delete(':id/uploads')

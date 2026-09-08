@@ -9,9 +9,11 @@ import { ChannelsService } from '../channels/channels.service';
 import { isUniqueViolationOnColumn } from '../common/database/pg-error.util';
 import {
   ChannelNotFoundException,
+  InvalidRangeException,
   ThumbnailNotAvailableException,
   UnsupportedVideoTypeException,
   VideoNotFoundException,
+  VideoNotReadyException,
   VideoTooLargeException,
   VideoUploadNotPendingException,
 } from '../common/exceptions/domain.exception';
@@ -22,6 +24,7 @@ import { StorageService } from '../storage/storage.service';
 import { CompleteUploadDto } from './dto/complete-upload.dto';
 import { CreateVideoDto } from './dto/create-video.dto';
 import { Video } from './entities/video.entity';
+import { parseRangeHeader } from './range.util';
 import { generateVideoSlug } from './video-slug.util';
 import {
   VIDEO_MAX_PARTS,
@@ -34,6 +37,7 @@ import type {
   CreatedVideo,
   PresignedPart,
   VideoProcessingJobData,
+  VideoStreamResult,
   VideoUploadStatus,
 } from './videos.types';
 
@@ -197,6 +201,60 @@ export class VideosService {
     }
 
     return this.storageService.getObjectRange(video.thumbnail_key);
+  }
+
+  async openStream(
+    userId: string,
+    slug: string,
+    rangeHeader: string | undefined,
+  ): Promise<VideoStreamResult> {
+    const video = await this.findReadyVideo(userId, slug);
+    const head = await this.storageService.headObject(video.source_key);
+    const requested = parseRangeHeader(rangeHeader, head.contentLength);
+
+    if (requested.kind === 'unsatisfiable') {
+      throw new InvalidRangeException(head.contentLength);
+    }
+
+    const range = requested.kind === 'partial' ? requested.range : null;
+    const object = await this.storageService.getObjectRange(
+      video.source_key,
+      range ?? undefined,
+    );
+
+    return {
+      video,
+      body: object.body,
+      contentType: object.contentType ?? video.mime_type,
+      contentLength: object.contentLength,
+      totalSize: head.contentLength,
+      range,
+    };
+  }
+
+  async openDownload(userId: string, slug: string): Promise<VideoStreamResult> {
+    const video = await this.findReadyVideo(userId, slug);
+    const head = await this.storageService.headObject(video.source_key);
+    const object = await this.storageService.getObjectRange(video.source_key);
+
+    return {
+      video,
+      body: object.body,
+      contentType: object.contentType ?? video.mime_type,
+      contentLength: object.contentLength,
+      totalSize: head.contentLength,
+      range: null,
+    };
+  }
+
+  private async findReadyVideo(userId: string, slug: string): Promise<Video> {
+    const video = await this.findOwnedVideo(userId, { slug });
+
+    if (video.status !== VideoStatus.READY) {
+      throw new VideoNotReadyException();
+    }
+
+    return video;
   }
 
   private async persistDraft(draft: Partial<Video>): Promise<Video> {

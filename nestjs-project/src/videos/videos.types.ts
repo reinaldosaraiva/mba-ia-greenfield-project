@@ -1,3 +1,6 @@
+import type { Readable } from 'node:stream';
+import type { Video } from './entities/video.entity';
+import type { ResolvedRange } from './range.util';
 import type { VideoStatus } from './videos.constants';
 
 export interface VideoUploadEnvelope {
@@ -27,4 +30,13 @@ export interface VideoUploadStatus {
 
 export interface VideoProcessingJobData {
   videoId: string;
+}
+
+export interface VideoStreamResult {
+  video: Video;
+  body: Readable;
+  contentType: string;
+  contentLength: number;
+  totalSize: number;
+  range: ResolvedRange | null;
 }

@@ -3,6 +3,9 @@ export abstract class DomainException extends Error {
     public readonly errorCode: string,
     public readonly httpStatus: number,
     message: string,
+    // Some domain errors carry a mandated response header — RFC 9110 requires
+    // `Content-Range` on a 416, for instance.
+    public readonly headers?: Record<string, string>,
   ) {
     super(message);
     this.name = this.constructor.name;
@@ -92,7 +95,9 @@ export class ThumbnailNotAvailableException extends DomainException {
 }
 
 export class InvalidRangeException extends DomainException {
-  constructor() {
-    super('INVALID_RANGE', 416, 'Requested range is not satisfiable');
+  constructor(totalSize: number) {
+    super('INVALID_RANGE', 416, 'Requested range is not satisfiable', {
+      'Content-Range': `bytes */${totalSize}`,
+    });
   }
 }
