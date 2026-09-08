@@ -105,10 +105,20 @@
 
 | Gate | Command | Result |
 |------|---------|--------|
-| Unit + integration suite | `docker compose exec nestjs-api npm test -- --runInBand` | 254 passing, 38 suites |
+| Unit + integration suite | `docker compose exec nestjs-api npm test -- --runInBand` | 259 passing, 39 suites |
 | E2E suite | `docker compose exec nestjs-api npm run test:e2e` | 79 passing, 4 suites |
 | Type check | `docker compose exec nestjs-api npx tsc --noEmit` | exit 0 |
 | Lint | `docker compose exec nestjs-api npm run lint` | exit 0 |
 | Build | `docker compose exec nestjs-api npm run build` | exit 0 |
 
-Baseline before the phase was 144 unit/integration + 52 e2e, so Phase 03 added 110 unit/integration and 27 e2e tests.
+Baseline before the phase was 144 unit/integration + 52 e2e, so Phase 03 added 115 unit/integration and 27 e2e tests.
+
+## Acceptance audit
+
+Independent pass over every acceptance criterion in `phase-03-videos.md` and the Fase 03 bullets in `docs/project-plan.md`, run against `dev` after the merge.
+
+- Every criterion maps to at least one automated test or a verified runtime check (Compose health, `ffmpeg`/`ffprobe` in both containers, worker boot log, all eight paths in `openapi.json`, queue named in `CLAUDE.md` and the architecture diagram). All five DoD gates were re-executed and reproduced.
+- Gap closed: `stream-response.util.ts` (SI-03.12) had no spec, so the criterion "a storage failure mid-stream does not terminate the API process, and a client disconnect destroys the upstream storage stream" was only verified by inspection. Added `stream-response.util.spec.ts` with five cases: byte-exact copy, rethrow before headers, truncate-and-log after headers, source destroyed on client disconnect, and `ECONNRESET` treated as a disconnect.
+- Observed, not changed: the migrations spec asserts the `videos` table and enum lifecycle but not the individual columns, the unique slug index or the channel FK. Those are exercised by `video.entity.integration-spec.ts` against a `synchronize` schema, so a drift between migration and entity would not be caught there; the migration was compared by hand and matches the entity column for column.
+- Observed, not changed: the 10GiB ceiling is verified by design (presigned multipart, bytes never cross the API, part count bounded, stored size re-checked) and by tests with a small real clip. No test uploads a 10GiB object.
+- Still open from SI-03.12: the parts-endpoint throttle keys on IP rather than user. Scope of Fase 02's global `ThrottlerGuard`.
