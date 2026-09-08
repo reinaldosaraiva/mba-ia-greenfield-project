@@ -1,7 +1,7 @@
 # phase-03-videos — Progress
 
 **Status:** in_progress
-**SIs:** 1/11 completed
+**SIs:** 2/11 completed
 
 ### SI-03.1 — Dependências, namespaces de configuração e serviços de infraestrutura
 - **Status:** completed
@@ -12,9 +12,12 @@
   - MinIO healthcheck uses `mc ready local`, which ships in the current `minio/minio` image.
 
 ### SI-03.2 — Entidade Video, migration e módulo
-- **Status:** pending
-- **Tests:** —
-- **Observations:** none
+- **Status:** completed
+- **Tests:** 159/159 passing suite-wide (video.entity.integration-spec.ts: 8, videos.module.spec.ts: 1, migrations.integration-spec.ts: 2)
+- **Observations:**
+  - Adding `@OneToMany(() => Video)` to `Channel` made every existing test DataSource fail with "Entity metadata for Channel#videos was not found" — TypeORM resolves relations eagerly, so an entity list missing `Video` breaks specs that never touch videos. Extracted the canonical list to `ALL_ENTITIES` in `src/test/create-test-data-source.ts` and pointed all ten specs at it, removing the duplicated local constant.
+  - `size_bytes` is `bigint` because 10GiB overflows int4; the driver returns it as a string, so the column carries a transformer that narrows to `number` at the entity boundary.
+  - `cleanAllTables` deletes `videos` before `channels` to respect the new foreign key.
 
 ### SI-03.3 — Adaptador de object storage (S3/MinIO)
 - **Status:** pending

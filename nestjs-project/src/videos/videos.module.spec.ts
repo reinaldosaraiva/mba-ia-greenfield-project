@@ -4,14 +4,14 @@ import {
   ALL_ENTITIES,
   createTestDataSource,
 } from '../test/create-test-data-source';
-import { UsersModule } from './users.module';
+import { VideosModule } from './videos.module';
 
-describe('UsersModule', () => {
-  it('should compile successfully', async () => {
+describe('VideosModule', () => {
+  it('should compile with TypeOrmModule.forFeature([Video])', async () => {
     const module = await Test.createTestingModule({
       imports: [
         TypeOrmModule.forRoot(createTestDataSource(ALL_ENTITIES).options),
-        UsersModule,
+        VideosModule,
       ],
     }).compile();
 
