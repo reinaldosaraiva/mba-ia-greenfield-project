@@ -1,7 +1,7 @@
 ---
 scope_type: phase
 related_phases: [3]
-status: pending
+status: decided
 date: 2026-09-08
 scope_description: "Backend foundation for video upload and processing: object storage layout, background job queue, 10GB direct-to-storage upload, video worker runtime, FFmpeg metadata/thumbnail extraction, unique video URL, streaming and download delivery, and the video status lifecycle."
 ---
@@ -42,7 +42,8 @@ _Subprojects in scope:_
 
 **Recommendation:** **Option A** — `@aws-sdk/client-s3` + `@aws-sdk/s3-request-presigner`, single bucket with `videos/{videoId}/…` and `thumbnails/{videoId}/…` prefixes. The presigner is a hard requirement of TD-03's upload handshake, and the single-bucket prefix layout makes a video's whole footprint addressable by one prefix. Per-entity buckets can be introduced later without touching the stored keys, because the key already carries the entity namespace.
 
-**Decision:** _[pending]_
+**Decision:** A (`@aws-sdk/client-s3` + `@aws-sdk/s3-request-presigner`, single bucket with per-entity prefixes)
+**Libraries:** `@aws-sdk/client-s3@^3.1127.0`, `@aws-sdk/s3-request-presigner@^3.1127.0`
 
 ---
 
@@ -74,7 +75,8 @@ _Subprojects in scope:_
 
 **Recommendation:** **Option A (BullMQ + Redis)** — it is the only option that gives first-party NestJS integration *and* built-in retry/backoff/failed-set semantics, which is exactly the surface TD-04's `failed` status needs. The cost is one Redis container, which is small next to the hand-rolled worker lifecycle that Option B requires and the broker topology Option C requires. Redis is configured with AOF persistence so a broker restart does not silently drop queued jobs.
 
-**Decision:** _[pending]_
+**Decision:** A (BullMQ over Redis via `@nestjs/bullmq`)
+**Libraries:** `bullmq@^6.3.4`, `@nestjs/bullmq@^12.0.0`
 
 ---
 
@@ -105,7 +107,7 @@ _Subprojects in scope:_
 
 **Recommendation:** **Option A (S3 multipart with presigned part URLs)** — it is the only option that both keeps the payload out of the API and expresses a 10GB object, and it reuses the storage client TD-01 already introduces instead of adding a fourth service. The extra client complexity is the correct place to pay: the client is the only party that holds the file. Server-side declared size is validated against a 10GB ceiling at `POST /videos` so an oversized upload is rejected before a single part is presigned.
 
-**Decision:** _[pending]_
+**Decision:** A (S3 multipart upload with presigned part URLs)
 
 ---
 
@@ -136,7 +138,7 @@ _Subprojects in scope:_
 
 **Recommendation:** **Option A** — the four states the brief names, terminal `failed` after a bounded retry budget (3 attempts, exponential backoff, supplied by TD-02), and a `processing_error` column carrying the reason. The abandoned-draft gap is accepted for this phase and handled by aborting the underlying multipart upload when a draft is deleted; a scheduled reaper is out of scope here (no capability bullet covers it) and is noted for a later phase.
 
-**Decision:** _[pending]_
+**Decision:** A (`draft → processing → ready | failed`, terminal failure after a bounded retry budget)
 
 ---
 
@@ -167,7 +169,7 @@ _Subprojects in scope:_
 
 **Recommendation:** **Option A** — a `video-worker` Compose service running a NestJS standalone application context off the shared source tree, built from a Dockerfile that installs `ffmpeg` (which brings `ffprobe`). It matches the target architecture, isolates CPU, and reuses the exact entity and config code the API uses, so schema drift between writer and reader is structurally impossible.
 
-**Decision:** _[pending]_
+**Decision:** A (separate `video-worker` Compose service running a NestJS standalone application context)
 
 ---
 
@@ -198,7 +200,7 @@ _Subprojects in scope:_
 
 **Recommendation:** **Option A** — `execFile`-based invocation of `ffprobe`/`ffmpeg` against a short-lived presigned GET URL. It adds no dependency, keeps 10GB off the worker's disk by relying on FFmpeg's HTTP range reads, and the `ffprobe` JSON contract is the most testable of the three. The thumbnail is captured at a seek point derived from the probed duration (10%, clamped to at least 1s) so that black lead-in frames are avoided, then uploaded to `thumbnails/{videoId}/thumbnail.jpg`.
 
-**Decision:** _[pending]_
+**Decision:** A (`execFile` invocation of `ffprobe`/`ffmpeg` against a presigned GET URL)
 
 ---
 
@@ -229,7 +231,7 @@ _Subprojects in scope:_
 
 **Recommendation:** **Option A** — an 11-character `base64url` slug from `node:crypto`, held in a unique-indexed `slug` column with retry-on-collision. It satisfies "curta e única" with a database-enforced guarantee, adds no dependency, sidesteps the `nanoid` ESM/CommonJS trap, and reuses the collision-retry convention the codebase already established for channel nicknames.
 
-**Decision:** _[pending]_
+**Decision:** A (11-character `base64url` slug from `node:crypto`, unique index with retry on collision)
 
 ---
 
@@ -260,7 +262,9 @@ _Subprojects in scope:_
 
 **Recommendation:** **Option A** — the API answers `Range` with `206 Partial Content`, streaming only the requested window out of storage. Per-request authorization is the deciding factor: Fase 04 introduces `unlisted`, and a bearer-grade presigned link cannot express it. The bandwidth cost is bounded and acceptable at this stage, and the presigned-redirect path in Option B remains available later as a pure delivery optimization behind the same endpoint, without changing the API contract.
 
-**Decision:** _[pending]_
+**Decision:** A (API answers `Range` with `206 Partial Content`)
+
+**Note (resolves IC-1):** `docs/diagrams/software-arch.mermaid` draws `Rel(frontend, storage, "Streams", "HTTPS")`, i.e. the client reading object storage directly. That relation describes the delivery optimisation Option B enables, not the Phase 03 contract: authorization has to run per request because Fase 04 introduces `unlisted` visibility, and a bearer-grade presigned link cannot express it. The endpoint `GET /videos/:slug/stream` is the stable contract; swapping its body for a `302` to a presigned URL later is a delivery change behind the same route, so the diagram stays valid as the target architecture.
 
 ---
 
@@ -291,7 +295,7 @@ _Subprojects in scope:_
 
 **Recommendation:** **Option A** — a dedicated `GET /videos/:slug/download` streaming the object with `Content-Disposition: attachment`, sharing the storage-read helper with the streaming route. It keeps the two capability bullets separately observable, keeps one authorization model across both delivery paths, and leaves room for download-specific policy later.
 
-**Decision:** _[pending]_
+**Decision:** A (dedicated route with `Content-Disposition: attachment`)
 
 ---
 
@@ -322,7 +326,7 @@ _Subprojects in scope:_
 
 **Recommendation:** **Option A** — real MinIO, real Redis and real FFmpeg from the Compose stack, mirroring how PostgreSQL and Mailpit are already used, with per-test key namespacing and explicit cleanup for isolation. The video fixture is generated at test time via FFmpeg's `testsrc`/`lavfi` inputs, so no binary artifact enters the repository and the decoder path is genuinely exercised.
 
-**Decision:** _[pending]_
+**Decision:** A (real MinIO, Redis and FFmpeg from Compose; fixture generated at test time)
 
 ---
 
@@ -330,13 +334,13 @@ _Subprojects in scope:_
 
 | ID | Scope | Decision | Recommendation | Choice |
 |----|-------|----------|---------------|--------|
-| TD-01 | Backend | Object Storage Client and Bucket/Key Organization | A (`@aws-sdk/client-s3` + presigner, single bucket with prefixes) | _[pending]_ |
-| TD-02 | Backend | Background Job Queue Technology | A (BullMQ over Redis + `@nestjs/bullmq`) | _[pending]_ |
-| TD-03 | Cross-layer | Large-File Upload Strategy (up to 10GB) | A (S3 multipart with presigned part URLs) | _[pending]_ |
-| TD-04 | Backend | Video Status Lifecycle and Processing-Failure Policy | A (`draft → processing → ready \| failed`, terminal failure after retry budget) | _[pending]_ |
-| TD-05 | Backend | Video Worker Runtime and Deployment Topology | A (separate Compose service, NestJS standalone context) | _[pending]_ |
-| TD-06 | Backend | Metadata Extraction and Thumbnail Generation Toolchain | A (`execFile` ffprobe/ffmpeg over presigned GET URL) | _[pending]_ |
-| TD-07 | Backend | Unique Video URL Identifier Strategy | A (11-char `base64url` slug from `node:crypto`, unique index + retry) | _[pending]_ |
-| TD-08 | Backend | Video Streaming Delivery Strategy | A (API proxies Range, `206 Partial Content`) | _[pending]_ |
-| TD-09 | Backend | Video Download Delivery | A (dedicated route with `Content-Disposition: attachment`) | _[pending]_ |
-| TD-10 | Backend | Test Strategy for the New External Infrastructure | A (real MinIO/Redis/FFmpeg from Compose, generated fixture) | _[pending]_ |
+| TD-01 | Backend | Object Storage Client and Bucket/Key Organization | A (`@aws-sdk/client-s3` + presigner, single bucket with prefixes) | A |
+| TD-02 | Backend | Background Job Queue Technology | A (BullMQ over Redis + `@nestjs/bullmq`) | A |
+| TD-03 | Cross-layer | Large-File Upload Strategy (up to 10GB) | A (S3 multipart with presigned part URLs) | A |
+| TD-04 | Backend | Video Status Lifecycle and Processing-Failure Policy | A (`draft → processing → ready \| failed`, terminal failure after retry budget) | A |
+| TD-05 | Backend | Video Worker Runtime and Deployment Topology | A (separate Compose service, NestJS standalone context) | A |
+| TD-06 | Backend | Metadata Extraction and Thumbnail Generation Toolchain | A (`execFile` ffprobe/ffmpeg over presigned GET URL) | A |
+| TD-07 | Backend | Unique Video URL Identifier Strategy | A (11-char `base64url` slug from `node:crypto`, unique index + retry) | A |
+| TD-08 | Backend | Video Streaming Delivery Strategy | A (API proxies Range, `206 Partial Content`) | A |
+| TD-09 | Backend | Video Download Delivery | A (dedicated route with `Content-Disposition: attachment`) | A |
+| TD-10 | Backend | Test Strategy for the New External Infrastructure | A (real MinIO/Redis/FFmpeg from Compose, generated fixture) | A |
